@@ -1,8 +1,12 @@
 window.__ModuleLoader__.load({
   id: "@axiaohungry/dsh-llm-workbuddy",
-  factory: () => {
+  factory: (require) => {
     const ROUTE = "/dsh-llm-workbuddy/auth";
     const MARKER = "data-workbuddy-auth-switch";
+    const AUTH_STATE_EVENT = "dsh-llm-workbuddy:auth-state";
+    const WORKBUDDY_PROVIDERS = new Set(["workbuddy-cn", "codebuddy-cn"]);
+    const React = require("react");
+    const { createElement, useEffect, useState } = React;
 
     function button(text) {
       const element = document.createElement("button");
@@ -145,6 +149,151 @@ window.__ModuleLoader__.load({
     function formatCredits(value) {
       const number = Number(value);
       return Number.isFinite(number) ? number.toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—";
+    }
+
+    async function authRequest(path, body) {
+      const options = {
+        method: body === undefined ? "GET" : "POST",
+        cache: "no-store",
+      };
+      if (body !== undefined) {
+        options.headers = { "content-type": "application/json" };
+        options.body = JSON.stringify(body);
+      }
+      const response = await fetch(`${ROUTE}/${path}`, options);
+      const text = await response.text();
+      let result = {};
+      try {
+        result = text ? JSON.parse(text) : {};
+      } catch {
+        result = {};
+      }
+      if (!response.ok || result.ok === false) {
+        const error = new Error(result.message || `请求失败（${response.status}）`);
+        error.status = response.status;
+        throw error;
+      }
+      return result;
+    }
+
+    function notifyAuthState() {
+      if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_STATE_EVENT));
+    }
+
+    function selectedProvider(selection) {
+      return selection?.next?.provider ?? selection?.lastUsed?.provider ?? selection?.provider;
+    }
+
+    function WorkBuddyCreditsDock({ useProjection }) {
+      let selection;
+      try {
+        selection = typeof useProjection === "function" ? useProjection("modelSelection") : undefined;
+      } catch {
+        selection = undefined;
+      }
+      const provider = selectedProvider(selection);
+      const selected = WORKBUDDY_PROVIDERS.has(provider);
+      const [state, setState] = useState(null);
+
+      useEffect(() => {
+        let disposed = false;
+        let requestId = 0;
+        const load = async () => {
+          const currentRequestId = ++requestId;
+          if (!selected) {
+            setState(null);
+            return;
+          }
+          setState({ mode: "token", creditLoading: true, credits: undefined, todayUsage: null, creditError: null, todayUsageError: null });
+          let status;
+          try {
+            status = await authRequest("status");
+          } catch {
+            if (!disposed && currentRequestId === requestId) setState(null);
+            return;
+          }
+          if (disposed || currentRequestId !== requestId) return;
+          if (status.mode !== "token" || !status.activeAccountId) {
+            setState({ ...status, creditLoading: false });
+            return;
+          }
+          try {
+            const result = await authRequest("credits", { accountId: status.activeAccountId });
+            if (!disposed && currentRequestId === requestId) setState({ ...status, ...result, creditLoading: false });
+          } catch (error) {
+            if (!disposed && currentRequestId === requestId) {
+              const message = error instanceof Error ? error.message : "查询 WorkBuddy 积分失败";
+              setState({
+                ...status,
+                credits: null,
+                creditLoading: false,
+                creditError: message,
+                todayUsage: null,
+                todayUsageError: "查询 WorkBuddy 今日请求量失败",
+              });
+            }
+          }
+        };
+        load();
+        const onAuthState = () => load();
+        window.addEventListener(AUTH_STATE_EVENT, onAuthState);
+        const timer = window.setInterval(load, 60_000);
+        return () => {
+          disposed = true;
+          window.removeEventListener(AUTH_STATE_EVENT, onAuthState);
+          window.clearInterval(timer);
+        };
+      }, [provider, selected]);
+
+      if (!selected || state?.mode !== "token" || !state?.activeAccountId) return null;
+      const creditsText = state.creditLoading
+        ? "剩余积分：读取中…"
+        : state.unlimited
+          ? "剩余积分：不限量"
+          : typeof state.credits === "number" && Number.isFinite(state.credits)
+            ? `剩余积分：${formatCredits(state.credits)}`
+            : state.creditError
+              ? "剩余积分：暂不可用"
+              : "剩余积分：—";
+      const today = state.todayUsage;
+      const usageText = today?.synced === true
+        ? `今日请求：${Number.isFinite(Number(today.count)) ? Number(today.count) : 0} 次 · 用量 ${formatCredits(today.used)} 积分`
+        : state.creditLoading
+          ? "今日请求：读取中…"
+          : state.todayUsageError
+            ? "今日请求：暂不可用"
+            : "今日请求：—";
+      const activeAccount = Array.isArray(state.accounts) ? state.accounts.find((account) => account.id === state.activeAccountId) : undefined;
+      return createElement(
+        "div",
+        {
+          className: "dsh-workbuddy-credits",
+          "data-workbuddy-credits": true,
+          role: "status",
+          "aria-live": "polite",
+          title: [activeAccount ? `当前账号：${accountText(activeAccount)}` : "", state.creditError, state.todayUsageError].filter(Boolean).join("；") || undefined,
+          style: {
+            boxSizing: "border-box",
+            width: "100%",
+            minWidth: 0,
+            minHeight: "20px",
+            padding: "2px 16px 0",
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            color: "var(--dsw-text-tertiary, #98a2b3)",
+            fontSize: "12px",
+            lineHeight: "18px",
+            fontVariantNumeric: "tabular-nums",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          },
+        },
+        createElement("span", null, creditsText),
+        createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 4px" } }, "·"),
+        createElement("span", null, usageText),
+      );
     }
 
     function applyCreditStatus(stats, status, activeAccount) {
@@ -345,8 +494,11 @@ window.__ModuleLoader__.load({
       field.append(controls);
       let current = { mode: "api-key", authenticated: false, accounts: [], apiKeys: [], credits: undefined, creditLoading: false, creditError: null, todayUsage: null, todayUsageError: null };
       const render = (status) => {
+        const previousMode = current.mode;
+        const previousAccountId = current.activeAccountId;
         current = { ...current, ...status };
         applyMode(input, keyButton, tokenButton, keySection, keySourceRow, keySelect, keyHint, newKeyInput, newKeyLabelInput, saveKeyButton, removeKeyButton, tokenSection, accountRow, accountSelect, accountName, addButton, removeButton, accountStats, message, current);
+        if (previousMode !== current.mode || previousAccountId !== current.activeAccountId) notifyAuthState();
       };
       render(current);
       let creditRequestId = 0;
@@ -531,6 +683,12 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
+        name: "conversation.composer.dock",
+        id: "workbuddy-credits",
+        order: 100,
+        label: "WorkBuddy 用量",
+      }, WorkBuddyCreditsDock));
       ctx.effect(() => {
         const observer = new MutationObserver(enhance);
         observer.observe(document.body, { childList: true, subtree: true });
@@ -543,6 +701,6 @@ window.__ModuleLoader__.load({
       }, "llm-workbuddy: auth switch");
     }
 
-    return { name: "dsh-llm-workbuddy-client", inject: [], apply };
+    return { name: "dsh-llm-workbuddy-client", inject: ["slots"], apply };
   },
 });
