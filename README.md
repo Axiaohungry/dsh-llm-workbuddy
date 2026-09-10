@@ -16,6 +16,8 @@ DSH WebUI 中管理模型和认证方式。
 - API Key 支持环境变量、多个 DSH 保存值，并可通过下拉列表切换；
 - 令牌支持浏览器登录、多个账号持久化、账号名称展示和下拉切换；
 - 令牌模式显示剩余积分、今日请求次数和今日积分用量；
+- 自动兼容 `modlens-workbuddy-cn` 等带有 WorkBuddy/CodeBuddy 标识的包装 Provider；
+- 用量信息与 DSH 的 Token/缓存统计显示在输入框底部同一行；
 - 自动从 WorkBuddy 获取当前账号可用模型；
 - 支持编辑模型 ID、名称、上下文窗口、最大输出 Token 和模型思考档位；
 - 支持添加、删除模型以及恢复在线模型目录；
@@ -189,6 +191,9 @@ dsh plugin --profile web list --depth 0
 
 积分查询只支持令牌模式，并依赖 WorkBuddy 中国站 billing 接口。网络、账号类型或接口
 暂时不可用时，页面会显示“暂不可用”，不影响模型调用。
+
+用量栏会识别 `workbuddy` 或 `codebuddy` 词段的 Provider ID，因此通过 ModLens 等插件
+包装的 Provider（例如 `modlens-workbuddy-cn`）也可以显示当前账号用量。
 
 ### 调用时报 `500 status code (no body)`
 

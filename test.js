@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { __testing } from "./index.js";
 import {
   workBuddyApiKeyEntries,
@@ -20,6 +21,14 @@ import {
 } from "./workbuddy-auth.js";
 import { authenticationMode } from "./workbuddy-web.js";
 import { __testing as creditsTesting, fetchWorkBuddyCredits } from "./workbuddy-credits.js";
+
+test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", () => {
+  const client = readFileSync(new URL("./client.js", import.meta.url), "utf8");
+  assert.match(client, /WORKBUDDY_PROVIDER_PATTERN/);
+  assert.match(client, /isWorkBuddyProvider\(provider\)/);
+  assert.match(client, /data-composer-stats/);
+  assert.match(client, /display: grid !important/);
+});
 
 test("忽略由其他插件负责的 Provider", () => {
   const builtins = new Map([["deepseek", {}]]);

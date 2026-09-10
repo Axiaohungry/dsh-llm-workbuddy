@@ -4,9 +4,18 @@ window.__ModuleLoader__.load({
     const ROUTE = "/dsh-llm-workbuddy/auth";
     const MARKER = "data-workbuddy-auth-switch";
     const AUTH_STATE_EVENT = "dsh-llm-workbuddy:auth-state";
-    const WORKBUDDY_PROVIDERS = new Set(["workbuddy-cn", "codebuddy-cn"]);
+    const WORKBUDDY_PROVIDER_PATTERN = /(?:^|-)(?:work-?buddy|code-?buddy)(?:-|$)/;
     const React = require("react");
     const { createElement, useEffect, useState } = React;
+
+    function isWorkBuddyProvider(value) {
+      const normalized = String(value ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      return normalized.length > 0 && WORKBUDDY_PROVIDER_PATTERN.test(normalized);
+    }
 
     function button(text) {
       const element = document.createElement("button");
@@ -121,9 +130,9 @@ window.__ModuleLoader__.load({
     function isWorkBuddy(input) {
       const editor = input.parentElement?.parentElement;
       if (!editor) return false;
-      if (editor.textContent?.includes("workbuddy-cn") || editor.textContent?.includes("codebuddy-cn")) return true;
+      if (isWorkBuddyProvider(editor.textContent)) return true;
       const provider = editor.parentElement?.querySelector('select[aria-label="提供方"]')?.value;
-      return provider === "workbuddy-cn" || provider === "codebuddy-cn";
+      return isWorkBuddyProvider(provider);
     }
 
     function accountText(account) {
@@ -192,7 +201,7 @@ window.__ModuleLoader__.load({
         selection = undefined;
       }
       const provider = selectedProvider(selection);
-      const selected = WORKBUDDY_PROVIDERS.has(provider);
+      const selected = isWorkBuddyProvider(provider);
       const [state, setState] = useState(null);
 
       useEffect(() => {
@@ -274,11 +283,12 @@ window.__ModuleLoader__.load({
           title: [activeAccount ? `当前账号：${accountText(activeAccount)}` : "", state.creditError, state.todayUsageError].filter(Boolean).join("；") || undefined,
           style: {
             boxSizing: "border-box",
-            width: "100%",
             minWidth: 0,
+            maxWidth: "min(100%, 420px)",
             minHeight: "20px",
-            padding: "2px 16px 0",
-            display: "flex",
+            padding: "0",
+            display: "inline-flex",
+            flex: "0 1 auto",
             justifyContent: "flex-end",
             alignItems: "center",
             color: "var(--dsw-text-tertiary, #98a2b3)",
@@ -294,6 +304,55 @@ window.__ModuleLoader__.load({
         createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 4px" } }, "·"),
         createElement("span", null, usageText),
       );
+    }
+
+    function installComposerDockLayout() {
+      if (typeof document === "undefined" || document.querySelector('style[data-plugin-css="dsh-llm-workbuddy-composer-dock"]')) return;
+      const style = document.createElement("style");
+      style.dataset.plugin = "@axiaohungry/dsh-llm-workbuddy";
+      style.dataset.pluginCss = "dsh-llm-workbuddy-composer-dock";
+      style.textContent = `
+[data-slot="conversation.composer.dock"]:has(> [data-composer-stats]),
+[data-slot="conversation.composer.dock"]:has(> [data-workbuddy-credits]) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px 4px;
+  overflow: hidden;
+}
+[data-slot="conversation.composer.dock"] > [data-composer-stats] {
+  grid-column: 2;
+  width: auto !important;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0 !important;
+}
+[data-slot="conversation.composer.dock"] > [data-workbuddy-credits] {
+  grid-column: 3;
+  justify-self: end;
+  width: auto !important;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0 !important;
+}
+@media (max-width: 760px) {
+  [data-slot="conversation.composer.dock"]:has(> [data-composer-stats]),
+  [data-slot="conversation.composer.dock"]:has(> [data-workbuddy-credits]) {
+    display: flex !important;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  [data-slot="conversation.composer.dock"] > [data-composer-stats],
+  [data-slot="conversation.composer.dock"] > [data-workbuddy-credits] {
+    flex: 0 1 auto;
+  }
+}
+`;
+      document.head.appendChild(style);
     }
 
     function applyCreditStatus(stats, status, activeAccount) {
@@ -683,6 +742,7 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      installComposerDockLayout();
       ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
         name: "conversation.composer.dock",
         id: "workbuddy-credits",
