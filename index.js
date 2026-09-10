@@ -294,6 +294,10 @@ function resolvedProfile(provider, source, piProvider, configuredMaxTokens = new
     headers: runtimeHeaders(source.headers),
     provider,
     displayName: source.displayName ?? piProvider.name ?? provider,
+    // dsh-llm-pi-ai reads this map for every exact model during catalog
+    // resolution. WorkBuddy profiles have no per-model validation failures
+    // here, but must still provide the empty map for the shared adapter API.
+    modelErrors: new Map(),
     ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
     streamIdleTimeoutMs: source.streamIdleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(source.retryPolicy, `${name}: provider "${provider}" retryPolicy`),
