@@ -88,6 +88,16 @@ test("会话级认证状态只保存账号或 API Key 引用", () => {
   assert.equal(JSON.stringify(restored).includes("should-not-persist"), false);
 });
 
+test("运行时缺少 sessionId 时不继承最近会话凭证，并保留新会话默认回退", () => {
+  const routing = createWorkBuddySessionRoutingState(true, {
+    "session-a": { mode: "token", accountId: "user:user-a" },
+  }, { mode: "token", accountId: "user:user-b" });
+  assert.deepEqual(__testing.sessionBindingFor(routing, "session-a", true), { mode: "token", accountId: "user:user-a" });
+  assert.equal(__testing.sessionBindingFor(routing, undefined, true), undefined);
+  assert.deepEqual(__testing.sessionBindingFor(routing, "session-missing", true), { mode: "token", accountId: "user:user-b" });
+  assert.deepEqual(__testing.sessionBindingFor(routing, undefined, false), { mode: "token", accountId: "user:user-b" });
+});
+
 test("忽略由其他插件负责的 Provider", () => {
   const builtins = new Map([["deepseek", {}]]);
 
@@ -146,7 +156,10 @@ test("模型请求恢复 WorkBuddy 官方 User-Agent", () => {
 
   assert.equal(resolved.headers["user-agent"], "CLI/unknown CodeBuddy/2.137.1");
   assert.equal(resolved.headers.existing, "value");
+  assert.equal(resolved.timeoutMs, 300_000);
   assert.equal(options.headers["user-agent"], "deepseek-harness");
+
+  assert.equal(__testing.workBuddyRequestOptions({ timeoutMs: 12_000 }).timeoutMs, 12_000);
 });
 
 test("显式空配置启用令牌模式，未配置时仍使用 API Key", () => {

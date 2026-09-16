@@ -58,7 +58,11 @@ const COMPAT = {
 };
 
 function workBuddyRequestOptions(options) {
-  return { ...options, headers: { ...(options?.headers ?? {}), "user-agent": USER_AGENT } };
+  return {
+    ...options,
+    timeoutMs: options?.timeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
+    headers: { ...(options?.headers ?? {}), "user-agent": USER_AGENT },
+  };
 }
 
 const workBuddyApi = {
@@ -368,6 +372,16 @@ function runtimeHeaders(headers, requestContext) {
   });
 }
 
+function sessionBindingFor(routing, sessionId, runtimeScoped = false) {
+  if (!routing?.enabled) return undefined;
+  const id = typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : undefined;
+  if (id && Object.hasOwn(routing.bindings, id)) return routing.bindings[id];
+  // ponytail: a new session can have an unbound id on its first request, so
+  // keep the recent default for that path. Only a truly missing runtime id
+  // must fail over to the global provider auth instead of another session.
+  return runtimeScoped && !id ? undefined : routing.lastUsed;
+}
+
 // The rc.6 pi-ai adapter rejects replay metadata it does not understand. A
 // newer DSH may persist a v2 envelope, so let old adapters use the durable
 // message content as provider-neutral history instead of failing the request.
@@ -404,7 +418,7 @@ function installSettingsCompat(ctx, ns, schema, entry, hooks) {
   });
 }
 
-export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddySource, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, selectWorkBuddyModels });
+export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddySource, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, selectWorkBuddyModels, sessionBindingFor });
 
 export function apply(ctx, config) {
   installWorkBuddyWeb(ctx);
@@ -535,11 +549,12 @@ export function apply(ctx, config) {
   };
 
   const resolveCredential = async (provider, profile, context = requestContext.getStore()) => {
+    const runtimeContext = context;
     context ??= {};
     const ref = profile.apiKeyEnv;
     const routing = WORKBUDDY_PROVIDERS.has(provider) ? await readSessionRouting() : createWorkBuddySessionRoutingState();
     const sessionId = context?.sessionId ? String(context.sessionId) : undefined;
-    const binding = routing.enabled ? sessionId && Object.hasOwn(routing.bindings, sessionId) ? routing.bindings[sessionId] : routing.lastUsed : undefined;
+    const binding = sessionBindingFor(routing, sessionId, runtimeContext !== undefined);
     if (WORKBUDDY_PROVIDERS.has(provider) && binding?.mode === "token") {
       let session;
       try {
