@@ -4,10 +4,54 @@ import { setTimeout as delay } from "node:timers/promises";
 
 export const WORKBUDDY_SESSION_REF = "WORKBUDDY_LOGIN_SESSION";
 export const WORKBUDDY_SESSIONS_REF = "WORKBUDDY_LOGIN_SESSIONS";
+export const WORKBUDDY_SESSION_ROUTING_REF = "WORKBUDDY_SESSION_ROUTING";
 export const WORKBUDDY_API_KEYS_REF = "WORKBUDDY_API_KEYS";
 export const LEGACY_SESSION_REF = "CODEBUDDY_LOGIN_SESSION";
 export const LEGACY_SESSIONS_REF = "CODEBUDDY_LOGIN_SESSIONS";
 export const LEGACY_API_KEYS_REF = "CODEBUDDY_API_KEYS";
+
+function normalizeWorkBuddySessionBinding(binding) {
+  if (!binding || typeof binding !== "object") return undefined;
+  if (binding.mode === "token" && typeof binding.accountId === "string" && binding.accountId.trim()) {
+    return { mode: "token", accountId: binding.accountId.trim() };
+  }
+  if (binding.mode === "api-key" && typeof binding.apiKeyRef === "string" && binding.apiKeyRef.trim()) {
+    return { mode: "api-key", apiKeyRef: binding.apiKeyRef.trim() };
+  }
+  return undefined;
+}
+
+export function createWorkBuddySessionRoutingState(enabled = false, bindings = {}, lastUsed) {
+  const normalized = {};
+  if (bindings && typeof bindings === "object" && !Array.isArray(bindings)) {
+    for (const [sessionId, binding] of Object.entries(bindings)) {
+      if (typeof sessionId !== "string" || !sessionId.trim() || !binding || typeof binding !== "object") continue;
+      const value = normalizeWorkBuddySessionBinding(binding);
+      if (value) normalized[sessionId] = value;
+    }
+  }
+  const recent = normalizeWorkBuddySessionBinding(lastUsed);
+  return {
+    version: 1,
+    enabled: enabled === true,
+    bindings: normalized,
+    ...(recent ? { lastUsed: recent } : {}),
+  };
+}
+
+export function serializeWorkBuddySessionRouting(state) {
+  return JSON.stringify(createWorkBuddySessionRoutingState(state?.enabled, state?.bindings, state?.lastUsed));
+}
+
+export function parseWorkBuddySessionRouting(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error("WorkBuddy 会话级认证配置已损坏，请重新设置", { cause: error });
+  }
+  return createWorkBuddySessionRoutingState(parsed?.enabled, parsed?.bindings, parsed?.lastUsed);
+}
 
 const BASE_URL = "https://copilot.tencent.com/v2/plugin";
 const USER_AGENT = "CLI/unknown CodeBuddy/2.137.1";

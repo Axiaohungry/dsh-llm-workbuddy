@@ -4,6 +4,7 @@ window.__ModuleLoader__.load({
     const ROUTE = "/dsh-llm-workbuddy/auth";
     const MARKER = "data-workbuddy-auth-switch";
     const AUTH_STATE_EVENT = "dsh-llm-workbuddy:auth-state";
+    const PENDING_MARKER = "data-workbuddy-new-session-selector";
     const WORKBUDDY_PROVIDER_PATTERN = /(?:^|-)(?:work-?buddy|code-?buddy)(?:-|$)/;
     const React = require("react");
     const { createElement, useEffect, useState } = React;
@@ -160,16 +161,17 @@ window.__ModuleLoader__.load({
       return Number.isFinite(number) ? number.toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—";
     }
 
-    async function authRequest(path, body) {
+    async function authRequest(path, body, sessionId) {
       const options = {
         method: body === undefined ? "GET" : "POST",
         cache: "no-store",
       };
       if (body !== undefined) {
         options.headers = { "content-type": "application/json" };
-        options.body = JSON.stringify(body);
+        options.body = JSON.stringify({ ...body, ...(sessionId && body.sessionId === undefined ? { sessionId: String(sessionId) } : {}) });
       }
-      const response = await fetch(`${ROUTE}/${path}`, options);
+      const query = sessionId && body === undefined ? `?sessionId=${encodeURIComponent(String(sessionId))}` : "";
+      const response = await fetch(`${ROUTE}/${path}${query}`, options);
       const text = await response.text();
       let result = {};
       try {
@@ -187,13 +189,178 @@ window.__ModuleLoader__.load({
 
     function notifyAuthState() {
       if (typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_STATE_EVENT));
+      if (typeof document !== "undefined") {
+        for (const panel of document.querySelectorAll(`[${PENDING_MARKER}]`)) {
+          delete panel.dataset.loaded;
+          mountPendingSelector();
+        }
+      }
     }
 
     function selectedProvider(selection) {
       return selection?.next?.provider ?? selection?.lastUsed?.provider ?? selection?.provider;
     }
 
-    function WorkBuddyCreditsDock({ useProjection }) {
+    function pendingCredentialOptions(status, mode) {
+      return mode === "token"
+        ? (Array.isArray(status.accounts) ? status.accounts : []).map((account) => ({ id: account.id, label: accountText(account) }))
+        : (Array.isArray(status.apiKeys) ? status.apiKeys : []).map((key) => ({ id: key.id, label: apiKeyText(key), disabled: key.configured === false }));
+    }
+
+    function createPendingSelector() {
+      const panel = document.createElement("div");
+      panel.setAttribute(PENDING_MARKER, "");
+      panel.setAttribute("role", "group");
+      panel.setAttribute("aria-label", "WorkBuddy 新会话凭证");
+      Object.assign(panel.style, {
+        boxSizing: "border-box",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        flexWrap: "wrap",
+        gap: "6px",
+        width: "100%",
+        maxWidth: "var(--dsh-composer-card-max-width, 720px)",
+        margin: "0 auto 8px",
+        padding: "0 8px",
+        color: "var(--dsw-text-tertiary, #98a2b3)",
+        fontSize: "12px",
+        lineHeight: "20px",
+      });
+      const label = document.createElement("span");
+      label.textContent = "新会话默认凭证";
+      const mode = document.createElement("select");
+      mode.setAttribute("aria-label", "新会话认证模式");
+      const credential = document.createElement("select");
+      credential.setAttribute("aria-label", "新会话 WorkBuddy 凭证");
+      for (const element of [mode, credential]) Object.assign(element.style, {
+        boxSizing: "border-box",
+        minWidth: "0",
+        maxWidth: "min(240px, 100%)",
+        height: "28px",
+        padding: "0 6px",
+        border: "1px solid var(--dsw-border-subtle, #d0d5dd)",
+        borderRadius: "7px",
+        background: "var(--dsw-surface-subtle, transparent)",
+        color: "inherit",
+        font: "inherit",
+        fontSize: "12px",
+      });
+      const hint = document.createElement("span");
+      hint.textContent = "会话创建后可在底部单独切换";
+      hint.style.color = "var(--dsw-text-tertiary, #98a2b3)";
+      panel.append(label, mode, credential, hint);
+      panel._workbuddyMode = mode;
+      panel._workbuddyCredential = credential;
+      panel._workbuddyHint = hint;
+      const apply = async () => {
+        if (panel.dataset.busy === "1") return;
+        const value = credential.value;
+        if (!value || credential.selectedOptions[0]?.disabled) return;
+        panel.dataset.busy = "1";
+        mode.disabled = true;
+        credential.disabled = true;
+        hint.textContent = "正在保存新会话默认凭证…";
+        try {
+          const next = mode.value === "token"
+            ? await authRequest("token", { accountId: value })
+            : await authRequest("api-key", { keyId: value });
+          renderPendingSelector(panel, next);
+          notifyAuthState();
+        } catch (error) {
+          hint.textContent = error instanceof Error ? error.message : "保存新会话凭证失败";
+          hint.style.color = "var(--dsw-text-danger, #c62828)";
+        } finally {
+          delete panel.dataset.busy;
+          mode.disabled = false;
+          credential.disabled = false;
+        }
+      };
+      mode.addEventListener("change", () => {
+        renderPendingOptions(panel, panel._workbuddyStatus, mode.value);
+        void apply();
+      });
+      credential.addEventListener("change", () => void apply());
+      return panel;
+    }
+
+    function renderPendingOptions(panel, status, preferredMode) {
+      if (!status) return;
+      const tokenOptions = pendingCredentialOptions(status, "token");
+      const apiOptions = pendingCredentialOptions(status, "api-key");
+      const tokenAvailable = tokenOptions.length > 0;
+      const apiAvailable = apiOptions.some((option) => !option.disabled);
+      if (!status.routingEnabled || (!tokenAvailable && !apiAvailable)) {
+        panel.hidden = true;
+        panel.style.setProperty("display", "none", "important");
+        return;
+      }
+      panel.hidden = false;
+      panel.style.setProperty("display", "flex", "important");
+      const mode = preferredMode === "token" && tokenAvailable || preferredMode === "api-key" && apiAvailable
+        ? preferredMode
+        : status.mode === "token" && tokenAvailable ? "token" : "api-key";
+      const modeSelect = panel._workbuddyMode;
+      const credentialSelect = panel._workbuddyCredential;
+      modeSelect.replaceChildren();
+      for (const [value, label, disabled] of [["token", "令牌", !tokenAvailable], ["api-key", "API Key", !apiAvailable]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        option.disabled = disabled;
+        modeSelect.append(option);
+      }
+      modeSelect.value = mode;
+      const options = mode === "token" ? tokenOptions : apiOptions;
+      credentialSelect.replaceChildren(...options.map((entry) => {
+        const option = document.createElement("option");
+        option.value = entry.id;
+        option.textContent = entry.label;
+        option.disabled = entry.disabled === true;
+        return option;
+      }));
+      const activeId = mode === "token" ? status.activeAccountId : status.activeApiKeyId;
+      if (activeId && options.some((entry) => entry.id === activeId && !entry.disabled)) credentialSelect.value = activeId;
+      panel._workbuddyHint.textContent = "会话创建后可在底部单独切换";
+      panel._workbuddyHint.style.color = "var(--dsw-text-tertiary, #98a2b3)";
+    }
+
+    function renderPendingSelector(panel, status) {
+      panel._workbuddyStatus = status;
+      renderPendingOptions(panel, status, panel._workbuddyMode.value);
+    }
+
+    function mountPendingSelector() {
+      if (typeof document === "undefined") return;
+      const seats = Array.from(document.querySelectorAll("[data-composer-seat]"));
+      const seat = seats.find((candidate) => candidate.closest('[data-phase="hero"]'));
+      const panels = Array.from(document.querySelectorAll(`[${PENDING_MARKER}]`));
+      if (!seat) {
+        for (const panel of panels) panel.remove();
+        return;
+      }
+      for (const panel of panels) {
+        if (panel.parentElement !== seat) panel.remove();
+      }
+      const panel = seat.querySelector(`[${PENDING_MARKER}]`) ?? createPendingSelector();
+      if (!panel.parentElement) seat.append(panel);
+      if (panel.dataset.loading === "1" || panel.dataset.loaded === "1") return;
+      panel.dataset.loading = "1";
+      authRequest("status")
+        .then((status) => {
+          panel.dataset.loaded = "1";
+          renderPendingSelector(panel, status);
+        })
+        .catch(() => {
+          panel.hidden = true;
+          panel.style.setProperty("display", "none", "important");
+        })
+        .finally(() => {
+          delete panel.dataset.loading;
+        });
+    }
+
+    function WorkBuddyCreditsDock({ useProjection, sessionId }) {
       let selection;
       try {
         selection = typeof useProjection === "function" ? useProjection("modelSelection") : undefined;
@@ -216,7 +383,7 @@ window.__ModuleLoader__.load({
           setState({ mode: "token", creditLoading: true, credits: undefined, todayUsage: null, creditError: null, todayUsageError: null });
           let status;
           try {
-            status = await authRequest("status");
+            status = await authRequest("status", undefined, sessionId);
           } catch {
             if (!disposed && currentRequestId === requestId) setState(null);
             return;
@@ -227,7 +394,7 @@ window.__ModuleLoader__.load({
             return;
           }
           try {
-            const result = await authRequest("credits", { accountId: status.activeAccountId });
+            const result = await authRequest("credits", { accountId: status.activeAccountId }, sessionId);
             if (!disposed && currentRequestId === requestId) setState({ ...status, ...result, creditLoading: false });
           } catch (error) {
             if (!disposed && currentRequestId === requestId) {
@@ -252,9 +419,10 @@ window.__ModuleLoader__.load({
           window.removeEventListener(AUTH_STATE_EVENT, onAuthState);
           window.clearInterval(timer);
         };
-      }, [provider, selected]);
+      }, [provider, selected, sessionId]);
 
-      if (!selected || state?.mode !== "token" || !state?.activeAccountId) return null;
+      const hasTokenAccount = state?.mode === "token" && Boolean(state.activeAccountId);
+      if (!selected || !state || (!state.routingEnabled && state.mode !== "token") || (!state.routingEnabled && state.mode === "token" && !state.activeAccountId) || (!sessionId && !hasTokenAccount)) return null;
       const creditsText = state.creditLoading
         ? "剩余积分：读取中…"
         : state.unlimited
@@ -273,21 +441,72 @@ window.__ModuleLoader__.load({
             ? "今日请求：暂不可用"
             : "今日请求：—";
       const activeAccount = Array.isArray(state.accounts) ? state.accounts.find((account) => account.id === state.activeAccountId) : undefined;
+      const credentialOptions = state.mode === "token"
+        ? (Array.isArray(state.accounts) ? state.accounts.map((account) => createElement("option", { key: account.id, value: account.id }, accountText(account))) : [])
+        : (Array.isArray(state.apiKeys) ? state.apiKeys.map((key) => createElement("option", { key: key.id, value: key.id, disabled: key.configured === false }, apiKeyText(key))) : []);
+      const onSessionCredentialChange = async (event) => {
+        if (!state.routingEnabled || !sessionId) return;
+        const value = event.target.value;
+        try {
+          const result = state.mode === "token"
+            ? await authRequest("token", { accountId: value }, sessionId)
+            : await authRequest("api-key", { keyId: value }, sessionId);
+          setState(result);
+          if (result.mode === "token" && result.activeAccountId) {
+            const credits = await authRequest("credits", { accountId: result.activeAccountId }, sessionId);
+            setState({ ...result, ...credits, creditLoading: false });
+          }
+        } catch (error) {
+          setState({ ...state, creditError: error instanceof Error ? error.message : "切换会话凭证失败" });
+        }
+      };
+      const onSessionModeChange = async (event) => {
+        if (!state.routingEnabled || !sessionId) return;
+        const mode = event.target.value;
+        const value = mode === "token" ? state.accounts?.[0]?.id : state.apiKeys?.find((key) => key.configured)?.id;
+        if (!value) return;
+        try {
+          const result = mode === "token"
+            ? await authRequest("token", { accountId: value }, sessionId)
+            : await authRequest("api-key", { keyId: value }, sessionId);
+          setState(result);
+          if (result.mode === "token" && result.activeAccountId) {
+            const credits = await authRequest("credits", { accountId: result.activeAccountId }, sessionId);
+            setState({ ...result, ...credits, creditLoading: false });
+          }
+        } catch (error) {
+          setState({ ...state, creditError: error instanceof Error ? error.message : "切换会话认证模式失败" });
+        }
+      };
+      const sessionControls = state.routingEnabled && sessionId ? createElement(
+        "span",
+        { "data-workbuddy-session-controls": true, style: { display: "inline-flex", alignItems: "center", justifyContent: "flex-end", flex: "1 1 100%", flexWrap: "wrap", gap: "4px", minWidth: 0, maxWidth: "100%" } },
+        createElement("select", { value: state.mode, onChange: onSessionModeChange, "aria-label": "当前会话认证模式", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "110px" } },
+          createElement("option", { value: "token" }, "令牌"),
+          createElement("option", { value: "api-key" }, "API Key"),
+        ),
+        createElement("select", { value: state.mode === "token" ? state.activeAccountId ?? "" : state.activeApiKeyId ?? "", onChange: onSessionCredentialChange, "aria-label": "当前会话凭证", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "190px" } }, credentialOptions),
+        createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 2px" } }, "·"),
+      ) : null;
       return createElement(
         "div",
         {
           className: "dsh-workbuddy-credits",
           "data-workbuddy-credits": true,
+          "data-workbuddy-session-aware": state.routingEnabled ? true : undefined,
           role: "status",
           "aria-live": "polite",
           title: [activeAccount ? `当前账号：${accountText(activeAccount)}` : "", state.creditError, state.todayUsageError].filter(Boolean).join("；") || undefined,
           style: {
             boxSizing: "border-box",
             minWidth: 0,
-            maxWidth: "min(100%, 420px)",
+            width: "100%",
+            maxWidth: "100%",
             minHeight: "20px",
             padding: "0",
             display: "inline-flex",
+            flexWrap: "wrap",
+            gap: "2px 8px",
             flex: "0 1 auto",
             justifyContent: "flex-end",
             alignItems: "center",
@@ -295,14 +514,15 @@ window.__ModuleLoader__.load({
             fontSize: "12px",
             lineHeight: "18px",
             fontVariantNumeric: "tabular-nums",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            whiteSpace: "normal",
+            overflow: "visible",
+            textOverflow: "clip",
           },
         },
-        createElement("span", null, creditsText),
-        createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 4px" } }, "·"),
-        createElement("span", null, usageText),
+        sessionControls,
+        state.mode === "token" ? createElement("span", null, creditsText) : null,
+        state.mode === "token" ? createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 4px" } }, "·") : null,
+        state.mode === "token" ? createElement("span", null, usageText) : createElement("span", null, "当前会话 API Key"),
       );
     }
 
@@ -334,10 +554,17 @@ window.__ModuleLoader__.load({
 [data-slot="conversation.composer.dock"] > [data-workbuddy-credits] {
   grid-column: 3;
   justify-self: end;
-  width: auto !important;
+  width: 100% !important;
   max-width: 100%;
   min-width: 0;
   margin: 0 !important;
+}
+[data-slot="conversation.composer.dock"] > [data-workbuddy-credits] > span {
+  min-width: 0;
+}
+[data-slot="conversation.composer.dock"] > [data-workbuddy-credits] > [data-workbuddy-session-controls] {
+  flex-basis: 100%;
+  width: 100%;
 }
 @media (max-width: 760px) {
   [data-slot="conversation.composer.dock"]:has(> [data-composer-stats]),
@@ -375,7 +602,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function applyMode(input, keyButton, tokenButton, keySection, keySourceRow, keySelect, keyHint, newKeyInput, newKeyLabelInput, saveKeyButton, removeKeyButton, tokenSection, accountRow, accountSelect, accountName, addButton, removeButton, accountStats, message, status) {
+    function applyMode(input, keyButton, tokenButton, keySection, keySourceRow, keySelect, keyHint, newKeyInput, newKeyLabelInput, saveKeyButton, removeKeyButton, tokenSection, accountRow, accountSelect, accountName, addButton, removeButton, accountStats, routingRow, routingToggle, message, status) {
       const token = status.mode === "token";
       const apiKeys = Array.isArray(status.apiKeys) ? status.apiKeys : [];
       const activeApiKeyId = status.activeApiKeyId ?? apiKeys[0]?.id;
@@ -424,6 +651,9 @@ window.__ModuleLoader__.load({
       removeButton.hidden = !token || !activeAccount;
       setVisible(accountStats, token && Boolean(activeAccount));
       applyCreditStatus(accountStats, status, activeAccount);
+      routingToggle.checked = status.routingEnabled === true;
+      routingToggle.disabled = false;
+      routingRow.title = status.routingEnabled ? "已启用：每个会话可单独选择 WorkBuddy 账号或 API Key" : "关闭时使用原有的全局账号或 API Key";
       message.textContent = token
         ? status.authenticated ? `令牌已登录：${activeAccount ? accountText(activeAccount) : "当前账号"}` : "令牌缺失，请重新登录"
         : status.apiKeyConfigured ? `API Key 已就绪：${activeApiKey ? apiKeyText(activeApiKey) : "当前来源"}` : "未配置 API Key，请输入后保存";
@@ -538,6 +768,20 @@ window.__ModuleLoader__.load({
       const usageStat = document.createElement("span");
       usageStat.dataset.workbuddyStat = "usage";
       accountStats.append(creditStat, usageStat);
+      const routingRow = row();
+      const routingToggle = document.createElement("input");
+      routingToggle.type = "checkbox";
+      routingToggle.setAttribute("aria-label", "启用会话级账号/API Key");
+      routingToggle.style.accentColor = "var(--dsw-accent, #2563eb)";
+      const routingLabel = document.createElement("label");
+      routingLabel.textContent = "会话级账号/API Key";
+      routingLabel.style.fontSize = "13px";
+      routingLabel.style.color = "var(--dsw-text-secondary, #667085)";
+      const routingHint = document.createElement("span");
+      routingHint.textContent = "关闭时保持原有全局认证方式";
+      routingHint.style.fontSize = "12px";
+      routingHint.style.color = "var(--dsw-text-tertiary, #98a2b3)";
+      routingRow.append(routingToggle, routingLabel, routingHint);
       const message = document.createElement("span");
       message.setAttribute("role", "status");
       message.setAttribute("aria-live", "polite");
@@ -549,15 +793,19 @@ window.__ModuleLoader__.load({
       accountRow.append(accountLabel, accountSelect, accountName, removeButton);
       tokenActionRow.append(addButton);
       tokenSection.append(tokenHint, accountRow, accountStats, tokenActionRow);
-      controls.append(modeRow, keySection, tokenSection, message);
+      controls.append(modeRow, routingRow, keySection, tokenSection, message);
       field.append(controls);
       let current = { mode: "api-key", authenticated: false, accounts: [], apiKeys: [], credits: undefined, creditLoading: false, creditError: null, todayUsage: null, todayUsageError: null };
       const render = (status) => {
         const previousMode = current.mode;
         const previousAccountId = current.activeAccountId;
+        const previousApiKeyId = current.activeApiKeyId;
+        const previousAccounts = current.accounts;
+        const previousApiKeys = current.apiKeys;
+        const previousRouting = current.routingEnabled;
         current = { ...current, ...status };
-        applyMode(input, keyButton, tokenButton, keySection, keySourceRow, keySelect, keyHint, newKeyInput, newKeyLabelInput, saveKeyButton, removeKeyButton, tokenSection, accountRow, accountSelect, accountName, addButton, removeButton, accountStats, message, current);
-        if (previousMode !== current.mode || previousAccountId !== current.activeAccountId) notifyAuthState();
+        applyMode(input, keyButton, tokenButton, keySection, keySourceRow, keySelect, keyHint, newKeyInput, newKeyLabelInput, saveKeyButton, removeKeyButton, tokenSection, accountRow, accountSelect, accountName, addButton, removeButton, accountStats, routingRow, routingToggle, message, current);
+        if (previousMode !== current.mode || previousAccountId !== current.activeAccountId || previousApiKeyId !== current.activeApiKeyId || previousAccounts !== current.accounts || previousApiKeys !== current.apiKeys || previousRouting !== current.routingEnabled) notifyAuthState();
       };
       render(current);
       let creditRequestId = 0;
@@ -589,6 +837,7 @@ window.__ModuleLoader__.load({
         accountSelect.disabled = busy;
         addButton.disabled = busy;
         removeButton.disabled = busy;
+        routingToggle.disabled = busy;
         keyButton.style.cursor = busy ? "progress" : "pointer";
         tokenButton.style.cursor = busy ? "progress" : "pointer";
         saveKeyButton.style.cursor = busy ? "progress" : "pointer";
@@ -723,6 +972,19 @@ window.__ModuleLoader__.load({
           setBusy(false);
         }
       });
+      routingToggle.addEventListener("change", async () => {
+        setBusy(true);
+        message.textContent = routingToggle.checked ? "正在启用会话级认证…" : "正在关闭会话级认证…";
+        try {
+          render(await authRequest("routing", { enabled: routingToggle.checked }));
+        } catch (error) {
+          routingToggle.checked = !routingToggle.checked;
+          message.textContent = error instanceof Error ? error.message : "切换会话级认证失败";
+          message.style.color = "var(--dsw-text-danger, #c62828)";
+        } finally {
+          setBusy(false);
+        }
+      });
       fetch(`${ROUTE}/status`, { cache: "no-store" })
         .then((response) => response.json())
         .then((status) => {
@@ -739,6 +1001,7 @@ window.__ModuleLoader__.load({
       for (const input of document.querySelectorAll('input[aria-label="API 密钥"]')) {
         if (isWorkBuddy(input)) mount(input);
       }
+      mountPendingSelector();
     }
 
     function apply(ctx) {

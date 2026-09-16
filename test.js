@@ -8,6 +8,7 @@ import {
   workBuddySessionAccounts,
   createWorkBuddyApiKeyStore,
   createWorkBuddySessionStore,
+  createWorkBuddySessionRoutingState,
   parseWorkBuddyApiKeys,
   parseWorkBuddySession,
   parseWorkBuddySessions,
@@ -15,6 +16,8 @@ import {
   serializeWorkBuddyApiKeys,
   serializeWorkBuddySession,
   serializeWorkBuddySessions,
+  serializeWorkBuddySessionRouting,
+  parseWorkBuddySessionRouting,
   sessionNeedsRefresh,
   upsertWorkBuddyApiKey,
   upsertWorkBuddySession,
@@ -24,10 +27,65 @@ import { __testing as creditsTesting, fetchWorkBuddyCredits } from "./workbuddy-
 
 test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", () => {
   const client = readFileSync(new URL("./client.js", import.meta.url), "utf8");
+  const index = readFileSync(new URL("./index.js", import.meta.url), "utf8");
   assert.match(client, /WORKBUDDY_PROVIDER_PATTERN/);
   assert.match(client, /isWorkBuddyProvider\(provider\)/);
   assert.match(client, /data-composer-stats/);
   assert.match(client, /display: grid !important/);
+  assert.match(client, /会话级账号\/API Key/);
+  assert.match(client, /新会话默认凭证/);
+  assert.match(client, /data-workbuddy-new-session-selector/);
+  assert.match(client, /sessionId/);
+  assert.match(client, /const hasTokenAccount = state\?\.mode === "token"/);
+  assert.match(client, /state\.routingEnabled && sessionId \? createElement/);
+  assert.match(client, /const seats = Array\.from\(document\.querySelectorAll\("\[data-composer-seat\]"\)\)/);
+  assert.match(client, /for \(const panel of panels\) panel\.remove\(\)/);
+  assert.match(index, /const legacyAdapter = typeof adapter\.prepareCall !== "function"/);
+  assert.match(index, /adapter\.prepareCall = async \(provider, model, signal\)/);
+});
+
+test("旧版适配器对未知 replay 状态降级为普通历史", () => {
+  const legacy = {
+    kind: "pi-ai",
+    version: 1,
+    api: "openai-completions",
+    provider: "workbuddy-cn",
+    model: "model",
+    stopReason: "stop",
+    blocks: [],
+  };
+  const modern = { response: { kind: "pi-ai", version: 2 }, blocks: [] };
+  const options = {
+    messages: [
+      { source: { kind: "model", replayState: modern }, content: [] },
+      { source: { kind: "model", replayState: legacy }, content: [] },
+      { source: { kind: "model", replayState: { kind: "other", version: 1 } }, content: [] },
+    ],
+  };
+
+  const normalized = __testing.stripUnsupportedReplay(options);
+  assert.equal(normalized.messages[0].source.replayState, undefined);
+  assert.deepEqual(normalized.messages[1].source.replayState, legacy);
+  assert.equal(normalized.messages[2].source.replayState, undefined);
+  assert.notStrictEqual(normalized, options);
+  assert.ok(options.messages[0].source.replayState.response);
+});
+
+test("会话级认证状态只保存账号或 API Key 引用", () => {
+  const state = createWorkBuddySessionRoutingState(true, {
+    "session-a": { mode: "token", accountId: "user:user-a" },
+    "session-b": { mode: "api-key", apiKeyRef: "WORKBUDDY_API_KEY_DSH_B" },
+    ignored: { mode: "token", accountId: "" },
+    secret: { mode: "api-key", apiKey: "should-not-persist" },
+  }, { mode: "token", accountId: "user:user-a" });
+  const restored = parseWorkBuddySessionRouting(serializeWorkBuddySessionRouting(state));
+  assert.equal(restored.enabled, true);
+  assert.deepEqual(restored.lastUsed, { mode: "token", accountId: "user:user-a" });
+  assert.deepEqual(restored.bindings, {
+    "session-a": { mode: "token", accountId: "user:user-a" },
+    "session-b": { mode: "api-key", apiKeyRef: "WORKBUDDY_API_KEY_DSH_B" },
+  });
+  assert.equal(JSON.stringify(restored).includes("should-not-persist"), false);
 });
 
 test("忽略由其他插件负责的 Provider", () => {
