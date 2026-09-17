@@ -30,6 +30,9 @@ test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", ()
   const index = readFileSync(new URL("./index.js", import.meta.url), "utf8");
   assert.match(client, /WORKBUDDY_PROVIDER_PATTERN/);
   assert.match(client, /isWorkBuddyProvider\(provider\)/);
+  assert.match(client, /isModLensWorkBuddyProvider/);
+  assert.match(client, /data-workbuddy-modlens-hint/);
+  assert.match(client, /出现 429 时请检查视觉引擎与额度/);
   assert.match(client, /data-composer-stats/);
   assert.match(client, /display: grid !important/);
   assert.match(client, /会话级账号\/API Key/);
@@ -69,6 +72,79 @@ test("旧版适配器对未知 replay 状态降级为普通历史", () => {
   assert.equal(normalized.messages[2].source.replayState, undefined);
   assert.notStrictEqual(normalized, options);
   assert.ok(options.messages[0].source.replayState.response);
+});
+
+test("直接 Provider 和 ModLens 包装 Provider 都能归一化 WorkBuddy replay 身份", () => {
+  const replay = {
+    kind: "pi-ai",
+    version: 1,
+    api: "openai-completions",
+    provider: "workbuddy-cn",
+    model: "model",
+    stopReason: "stop",
+    blocks: [],
+  };
+  const wrapped = {
+    provider: "modlens-workbuddy-cn",
+    messages: [{
+      role: "assistant",
+      content: [],
+      source: { kind: "model", provider: "modlens-workbuddy-cn", replayState: replay },
+    }],
+  };
+  const normalized = __testing.normalizeWorkBuddyReplay(wrapped);
+  assert.notStrictEqual(normalized, wrapped);
+  assert.equal(normalized.messages[0].source.provider, "workbuddy-cn");
+  assert.equal(normalized.messages[0].source.replayState.provider, "workbuddy-cn");
+  assert.equal(wrapped.messages[0].source.provider, "modlens-workbuddy-cn");
+  assert.equal(wrapped.messages[0].source.replayState.provider, "workbuddy-cn");
+
+  const direct = {
+    provider: "workbuddy-cn",
+    messages: [{
+      role: "assistant",
+      content: [],
+      source: { kind: "model", provider: "workbuddy-cn", replayState: replay },
+    }],
+  };
+  assert.strictEqual(__testing.normalizeWorkBuddyReplay(direct), direct);
+});
+
+test("中断工具错误只移除最后一次助手消息的 replayState", () => {
+  const replay = {
+    kind: "pi-ai",
+    version: 1,
+    api: "openai-completions",
+    provider: "workbuddy-cn",
+    model: "model",
+    stopReason: "toolUse",
+    blocks: [{ type: "tool-call" }],
+  };
+  const options = {
+    provider: "workbuddy-cn",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "earlier" }], source: { kind: "model", provider: "workbuddy-cn", replayState: { ...replay, blocks: [{ type: "text" }] } } },
+      { role: "assistant", content: [{ type: "tool-call", id: "call-1", name: "pwsh", arguments: "{}" }], source: { kind: "model", provider: "workbuddy-cn", replayState: replay } },
+      { role: "user", content: [{ type: "tool-result", toolCallId: "call-1", isError: true, content: [{ type: "text", text: "unknown outcome" }] }] },
+      { role: "system", content: [{ type: "text", text: "interrupted" }] },
+    ],
+  };
+  const normalized = __testing.prepareWorkBuddyOptions(options);
+  assert.equal(normalized.messages[0].source.replayState.kind, "pi-ai");
+  assert.equal(normalized.messages[1].source.replayState, undefined);
+  assert.equal(normalized.messages[2].content[0].isError, true);
+});
+
+test("非 WorkBuddy Provider 不会被 replay 兜底改写", () => {
+  const options = {
+    provider: "opencode-go-live",
+    messages: [{
+      role: "assistant",
+      content: [],
+      source: { kind: "model", provider: "opencode-go-live", replayState: { kind: "pi-ai", version: 1 } },
+    }],
+  };
+  assert.strictEqual(__testing.normalizeWorkBuddyReplay(options), options);
 });
 
 test("会话级认证状态只保存账号或 API Key 引用", () => {

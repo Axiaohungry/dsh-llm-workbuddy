@@ -18,6 +18,15 @@ window.__ModuleLoader__.load({
       return normalized.length > 0 && WORKBUDDY_PROVIDER_PATTERN.test(normalized);
     }
 
+    function isModLensWorkBuddyProvider(value) {
+      const normalized = String(value ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      return /^modlens-(?:work-?buddy|code-?buddy)(?:-|$)/.test(normalized);
+    }
+
     function button(text) {
       const element = document.createElement("button");
       element.type = "button";
@@ -369,6 +378,7 @@ window.__ModuleLoader__.load({
       }
       const provider = selectedProvider(selection);
       const selected = isWorkBuddyProvider(provider);
+      const modlens = isModLensWorkBuddyProvider(provider);
       const [state, setState] = useState(null);
 
       useEffect(() => {
@@ -440,6 +450,18 @@ window.__ModuleLoader__.load({
           : state.todayUsageError
             ? "今日请求：暂不可用"
             : "今日请求：—";
+      const modlensHint = modlens ? createElement("span", {
+        "data-workbuddy-modlens-hint": true,
+        title: "ModLens 会先处理会话中的历史图片，首次响应可能较慢；若超时、无响应或返回 429，请检查视觉引擎登录、网络和额度。纯文本任务可切换 WorkBuddy 直连。",
+        style: {
+          flex: "1 1 100%",
+          minWidth: 0,
+          color: "var(--dsw-text-tertiary, #98a2b3)",
+          fontSize: "11px",
+          lineHeight: "16px",
+          textAlign: "right",
+        },
+      }, "ModLens：历史图片会先处理，响应较慢或出现 429 时请检查视觉引擎与额度；纯文本可切换 WorkBuddy 直连") : null;
       const activeAccount = Array.isArray(state.accounts) ? state.accounts.find((account) => account.id === state.activeAccountId) : undefined;
       const credentialOptions = state.mode === "token"
         ? (Array.isArray(state.accounts) ? state.accounts.map((account) => createElement("option", { key: account.id, value: account.id }, accountText(account))) : [])
@@ -523,6 +545,7 @@ window.__ModuleLoader__.load({
         state.mode === "token" ? createElement("span", null, creditsText) : null,
         state.mode === "token" ? createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 4px" } }, "·") : null,
         state.mode === "token" ? createElement("span", null, usageText) : createElement("span", null, "当前会话 API Key"),
+        modlensHint,
       );
     }
 

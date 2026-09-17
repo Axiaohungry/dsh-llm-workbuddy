@@ -39,6 +39,7 @@ const NS = typeof dshSettings.settingsNamespace === "function" ? dshSettings.set
 const PROVIDER = "workbuddy-cn";
 const LEGACY_PROVIDER = "codebuddy-cn";
 const WORKBUDDY_PROVIDERS = new Set([PROVIDER, LEGACY_PROVIDER]);
+const WORKBUDDY_PROVIDER_PATTERN = /(?:^|-)(?:work-?buddy|code-?buddy)(?:-|$)/;
 const DISPLAY_NAME = "WorkBuddy 中国区";
 const API_KEY_ENV = "WORKBUDDY_API_KEY";
 const LEGACY_API_KEY_ENV = "CODEBUDDY_API_KEY";
@@ -382,6 +383,84 @@ function sessionBindingFor(routing, sessionId, runtimeScoped = false) {
   return runtimeScoped && !id ? undefined : routing.lastUsed;
 }
 
+function normalizedProviderName(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function isWorkBuddyProviderName(value) {
+  const normalized = normalizedProviderName(value);
+  return normalized.length > 0 && WORKBUDDY_PROVIDER_PATTERN.test(normalized);
+}
+
+function directWorkBuddyProvider(value) {
+  const normalized = normalizedProviderName(value);
+  if (normalized === PROVIDER || normalized === LEGACY_PROVIDER) return normalized;
+  return undefined;
+}
+
+function interruptedToolTailAssistantIndex(messages) {
+  let tailIndex = messages.length - 1;
+  while (tailIndex >= 0 && messages[tailIndex]?.role === "system") tailIndex -= 1;
+  if (tailIndex < 0) return -1;
+  const tail = messages[tailIndex];
+  if (tail?.role !== "user" || !Array.isArray(tail.content)) return -1;
+  if (!tail.content.some((block) => block?.type === "tool-result" && block.isError === true)) return -1;
+  for (let index = tailIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    return Array.isArray(message.content) && message.content.some((block) => block?.type === "tool-call") ? index : -1;
+  }
+  return -1;
+}
+
+/**
+ * Make WorkBuddy replay metadata safe across direct and wrapped provider ids.
+ * The returned messages are request-only copies; durable session history is
+ * never rewritten. An interrupted tool result deliberately loses only the
+ * preceding assistant replayState so the model receives ordinary history.
+ */
+function normalizeWorkBuddyReplay(options) {
+  if (!Array.isArray(options?.messages)) return options;
+  const currentProvider = options.provider;
+  if (!isWorkBuddyProviderName(currentProvider)) return options;
+  const interruptedIndex = interruptedToolTailAssistantIndex(options.messages);
+  let changed = false;
+  const messages = options.messages.map((message, index) => {
+    const source = message?.source;
+    const state = source?.replayState;
+    if (message?.role !== "assistant" || !source || state?.kind !== "pi-ai" || state?.version !== 1) return message;
+
+    let nextSource = source;
+    const sourceProvider = source.provider;
+    const replayProvider = state.provider;
+    if (isWorkBuddyProviderName(sourceProvider) && isWorkBuddyProviderName(replayProvider)) {
+      const canonical = directWorkBuddyProvider(replayProvider)
+        ?? directWorkBuddyProvider(sourceProvider)
+        ?? directWorkBuddyProvider(currentProvider);
+      if (canonical && (sourceProvider !== canonical || replayProvider !== canonical)) {
+        nextSource = {
+          ...nextSource,
+          provider: canonical,
+          replayState: { ...state, provider: canonical },
+        };
+      }
+    }
+
+    if (index === interruptedIndex && nextSource.replayState !== undefined) {
+      const { replayState: _ignored, ...withoutReplay } = nextSource;
+      nextSource = withoutReplay;
+    }
+    if (nextSource === source) return message;
+    changed = true;
+    return { ...message, source: nextSource };
+  });
+  return changed ? { ...options, messages } : options;
+}
+
 // The rc.6 pi-ai adapter rejects replay metadata it does not understand. A
 // newer DSH may persist a v2 envelope, so let old adapters use the durable
 // message content as provider-neutral history instead of failing the request.
@@ -397,6 +476,11 @@ function stripUnsupportedReplay(options) {
     return { ...message, source: sourceWithoutReplay };
   });
   return changed ? { ...options, messages } : options;
+}
+
+function prepareWorkBuddyOptions(options, legacyReplay = true) {
+  const normalized = normalizeWorkBuddyReplay(options);
+  return legacyReplay ? stripUnsupportedReplay(normalized) : normalized;
 }
 
 function workBuddySource(config, source) {
@@ -418,7 +502,7 @@ function installSettingsCompat(ctx, ns, schema, entry, hooks) {
   });
 }
 
-export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddySource, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, selectWorkBuddyModels, sessionBindingFor });
+export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddySource, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, normalizeWorkBuddyReplay, prepareWorkBuddyOptions, selectWorkBuddyModels, sessionBindingFor });
 
 export function apply(ctx, config) {
   installWorkBuddyWeb(ctx);
@@ -623,7 +707,7 @@ export function apply(ctx, config) {
   };
   const adapterStream = adapter.stream.bind(adapter);
   const legacyAdapter = typeof adapter.prepareCall !== "function";
-  const invokeAdapterStream = (options) => adapterStream(legacyAdapter ? stripUnsupportedReplay(options) : options);
+  const invokeAdapterStream = (options) => adapterStream(prepareWorkBuddyOptions(options, legacyAdapter));
   adapter.stream = (options) => sessionScopedStream(invokeAdapterStream, options);
   // `prepareCall` was added after the DSH rc.6 adapter. Keep the direct
   // `stream` path working on older hosts while wrapping prepared calls on
@@ -634,7 +718,7 @@ export function apply(ctx, config) {
       const prepared = await adapterPrepareCall(...args);
       return {
         ...prepared,
-        stream: (options) => sessionScopedStream(prepared.stream, options),
+        stream: (options) => sessionScopedStream((preparedOptions) => prepared.stream(prepareWorkBuddyOptions(preparedOptions, false)), options),
       };
     };
   } else {

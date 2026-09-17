@@ -147,6 +147,25 @@ DSH 保存的 Key 存放在 DSH 凭据服务中。可以保存多个 Key 并随�
 模型目录按当前账号权限返回。更换 API Key 或令牌账号后，建议重新点击“获取可用模型”。
 如果在线目录暂时失败，插件会使用内置目录作为兜底。
 
+## ModLens 兼容性
+
+插件兼容 `modlens-workbuddy-cn`、`modlens-codebuddy-cn` 等包装 Provider。包装 Provider
+会先由 ModLens 处理图片，再把请求转发给 WorkBuddy，因此它不是另一个 WorkBuddy 账号：
+
+- 会话历史中有图片时，首次响应可能比 WorkBuddy 直连慢；旧会话中的历史图片也可能再次参与处理；
+- 超时、无响应或 `429`/“配额耗尽”通常来自 ModLens 的视觉引擎，不代表 WorkBuddy 令牌或 API Key 失效；
+- 纯文本任务可切换到 `workbuddy-cn/<model-id>`，绕过视觉桥接；
+- WorkBuddy 的令牌积分和请求量与 ModLens 视觉引擎额度相互独立，插件不会混合统计。
+
+遇到包装模型异常时，可运行 ModLens 提供的诊断命令检查视觉引擎状态：
+
+```powershell
+modlens doctor --json
+```
+
+如果纯文本直连正常、而带历史图片的请求变慢或失败，优先检查 ModLens 的视觉引擎登录状态、网络
+和额度；切换 WorkBuddy 账号不会恢复已经耗尽的视觉引擎配额。
+
 ## 思考程度
 
 思考档位按模型分别决定，插件不会给所有模型强行使用同一套选项。在线模型目录会声明
