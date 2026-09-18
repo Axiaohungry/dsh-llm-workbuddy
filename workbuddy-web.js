@@ -288,10 +288,14 @@ export function installWorkBuddyWeb(ctx) {
       const recentApiKey = recentBinding?.mode === "api-key" ? apiKeys.apiKeys.find((entry) => entry.ref === recentBinding.apiKeyRef) : undefined;
       const sessionBindingValid = !sessionBinding || (sessionBinding.mode === "token" ? Boolean(exactAccount) : Boolean(exactApiKey?.configured));
       const recentBindingValid = !recentBinding || (recentBinding.mode === "token" ? Boolean(recentAccount) : Boolean(recentApiKey?.configured));
-      const effectiveBinding = sessionBinding ?? (recentBindingValid ? recentBinding : undefined);
-      const boundAccount = effectiveBinding?.mode === "token" ? (sessionBinding ? exactAccount : recentAccount) : undefined;
-      const boundApiKey = effectiveBinding?.mode === "api-key" ? (sessionBinding ? exactApiKey : recentApiKey) : undefined;
-      const mode = effectiveBinding?.mode ?? globalMode;
+      const effectiveBinding = sessionBinding;
+      const suggestedBinding = !sessionBinding && recentBindingValid ? recentBinding : undefined;
+      // Unbound Sessions display the new-Session default, but runtime auth only
+      // becomes exact after the first model call persists it for that Session.
+      const displayedBinding = effectiveBinding ?? suggestedBinding;
+      const boundAccount = displayedBinding?.mode === "token" ? (effectiveBinding ? exactAccount : recentAccount) : undefined;
+      const boundApiKey = displayedBinding?.mode === "api-key" ? (effectiveBinding ? exactApiKey : recentApiKey) : undefined;
+      const mode = displayedBinding?.mode ?? globalMode;
       return {
         ok: true,
         mode,
@@ -303,16 +307,19 @@ export function installWorkBuddyWeb(ctx) {
         lastUsedBinding: recentBinding ?? null,
         lastUsedBindingValid: recentBindingValid,
         effectiveBinding: effectiveBinding ?? null,
-        authenticated: effectiveBinding
-          ? effectiveBinding.mode === "token" ? Boolean(boundAccount) : Boolean(boundApiKey?.configured)
-          : active !== undefined,
-        activeAccountId: effectiveBinding?.mode === "token" ? boundAccount?.id ?? null : active?.id ?? null,
+        suggestedBinding: suggestedBinding ?? null,
+        suggestedAccountId: suggestedBinding?.mode === "token" ? recentAccount?.id ?? null : null,
+        suggestedApiKeyId: suggestedBinding?.mode === "api-key" ? recentApiKey?.id ?? null : null,
+        authenticated: displayedBinding
+          ? displayedBinding.mode === "token" ? Boolean(boundAccount) : Boolean(boundApiKey?.configured)
+          : globalMode === "token" ? active !== undefined : apiKeys.apiKeyConfigured,
+        activeAccountId: displayedBinding?.mode === "token" ? boundAccount?.id ?? null : active?.id ?? null,
         globalActiveAccountId: active?.id ?? null,
         accounts: workBuddySessionAccounts(store),
         ...apiKeys,
-        activeApiKeyId: effectiveBinding?.mode === "api-key" ? boundApiKey?.id ?? null : apiKeys.activeApiKeyId,
+        activeApiKeyId: displayedBinding?.mode === "api-key" ? boundApiKey?.id ?? null : apiKeys.activeApiKeyId,
         globalActiveApiKeyId: apiKeys.activeApiKeyId,
-        apiKeyConfigured: mode === "api-key" && (effectiveBinding?.mode === "api-key" ? Boolean(boundApiKey?.configured) : apiKeys.apiKeyConfigured),
+        apiKeyConfigured: mode === "api-key" && (displayedBinding?.mode === "api-key" ? Boolean(boundApiKey?.configured) : apiKeys.apiKeyConfigured),
       };
     };
     const status = async (req, res) => {
@@ -334,6 +341,24 @@ export function installWorkBuddyWeb(ctx) {
         json(res, 200, await currentState(body.sessionId));
       } catch (error) {
         json(res, 500, { ok: false, message: error instanceof Error ? error.message : "切换会话级认证失败" });
+      }
+    };
+    const unbind = async (req, res) => {
+      if (req.method !== "POST") return json(res, 405, { ok: false, message: "Method not allowed" });
+      if (!localPost(req)) return json(res, 403, { ok: false, message: "只允许从本机 DSH 页面解除会话认证" });
+      try {
+        const body = await requestBody(req);
+        const sessionId = sessionIdOf(body.sessionId);
+        if (!sessionId) return json(res, 400, { ok: false, message: "缺少当前会话 ID" });
+        const state = await readSessionRouting(webCtx.credentials);
+        if (Object.hasOwn(state.bindings, sessionId)) {
+          const bindings = { ...state.bindings };
+          delete bindings[sessionId];
+          await writeSessionRouting(webCtx.credentials, { ...state, bindings });
+        }
+        json(res, 200, await currentState(sessionId));
+      } catch (error) {
+        json(res, 500, { ok: false, message: error instanceof Error ? error.message : "解除会话认证失败" });
       }
     };
     const apiKey = async (req, res) => {
@@ -596,6 +621,7 @@ export function installWorkBuddyWeb(ctx) {
       const dispose = [
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/status`, handler: status }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/routing`, handler: routing }),
+        webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/unbind`, handler: unbind }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/api-key`, handler: apiKey }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/api-key/add`, handler: addApiKey }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/api-key/remove`, handler: removeApiKey }),

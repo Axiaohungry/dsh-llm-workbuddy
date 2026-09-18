@@ -28,6 +28,7 @@ import { __testing as creditsTesting, fetchWorkBuddyCredits } from "./workbuddy-
 test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", () => {
   const client = readFileSync(new URL("./client.js", import.meta.url), "utf8");
   const index = readFileSync(new URL("./index.js", import.meta.url), "utf8");
+  const web = readFileSync(new URL("./workbuddy-web.js", import.meta.url), "utf8");
   assert.match(client, /WORKBUDDY_PROVIDER_PATTERN/);
   assert.match(client, /isWorkBuddyProvider\(provider\)/);
   assert.match(client, /isModLensWorkBuddyProvider/);
@@ -38,6 +39,9 @@ test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", ()
   assert.match(client, /会话级账号\/API Key/);
   assert.match(client, /新会话默认凭证/);
   assert.match(client, /data-workbuddy-new-session-selector/);
+  assert.match(client, /发送时自动绑定所选凭证/);
+  assert.match(client, /解除绑定/);
+  assert.match(client, /window\.confirm/);
   assert.match(client, /sessionId/);
   assert.match(client, /const hasTokenAccount = state\?\.mode === "token"/);
   assert.match(client, /state\.routingEnabled && sessionId \? createElement/);
@@ -45,6 +49,11 @@ test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", ()
   assert.match(client, /for \(const panel of panels\) panel\.remove\(\)/);
   assert.match(index, /const legacyAdapter = typeof adapter\.prepareCall !== "function"/);
   assert.match(index, /adapter\.prepareCall = async \(provider, model, signal\)/);
+  assert.match(index, /persistDefaultSessionBinding/);
+  assert.match(index, /bindings: \{ \.\.\.latest\.bindings, \[sessionId\]: binding \}/);
+  assert.match(web, /path: `\$\{ROUTE\}\/unbind`/);
+  assert.match(web, /const effectiveBinding = sessionBinding;/);
+  assert.match(web, /const displayedBinding = effectiveBinding \?\? suggestedBinding/);
 });
 
 test("旧版适配器对未知 replay 状态降级为普通历史", () => {
@@ -164,14 +173,17 @@ test("会话级认证状态只保存账号或 API Key 引用", () => {
   assert.equal(JSON.stringify(restored).includes("should-not-persist"), false);
 });
 
-test("运行时缺少 sessionId 时不继承最近会话凭证，并保留新会话默认回退", () => {
-  const routing = createWorkBuddySessionRoutingState(true, {
+test("直连与 ModLens 转发都保留明确会话绑定，默认值只供未绑定会话首次固化", () => {
+  const first = createWorkBuddySessionRoutingState(true, {
     "session-a": { mode: "token", accountId: "user:user-a" },
   }, { mode: "token", accountId: "user:user-b" });
-  assert.deepEqual(__testing.sessionBindingFor(routing, "session-a", true), { mode: "token", accountId: "user:user-a" });
-  assert.equal(__testing.sessionBindingFor(routing, undefined, true), undefined);
-  assert.deepEqual(__testing.sessionBindingFor(routing, "session-missing", true), { mode: "token", accountId: "user:user-b" });
-  assert.deepEqual(__testing.sessionBindingFor(routing, undefined, false), { mode: "token", accountId: "user:user-b" });
+  const changedDefault = createWorkBuddySessionRoutingState(true, first.bindings, { mode: "token", accountId: "user:user-c" });
+  assert.deepEqual(__testing.sessionBindingFor(first, "session-a"), { mode: "token", accountId: "user:user-a" });
+  assert.deepEqual(__testing.sessionBindingFor(changedDefault, "session-a"), { mode: "token", accountId: "user:user-a" });
+  // ModLens 保留原始 options.sessionId 后再转发到 workbuddy-cn，因而与直连走同一绑定解析。
+  assert.deepEqual(__testing.sessionBindingFor(changedDefault, "session-a"), __testing.sessionBindingFor(first, "session-a"));
+  assert.equal(__testing.sessionBindingFor(changedDefault, "session-missing"), undefined);
+  assert.equal(__testing.sessionBindingFor(changedDefault, undefined), undefined);
 });
 
 test("忽略由其他插件负责的 Provider", () => {

@@ -256,7 +256,7 @@ window.__ModuleLoader__.load({
         fontSize: "12px",
       });
       const hint = document.createElement("span");
-      hint.textContent = "会话创建后可在底部单独切换";
+      hint.textContent = "发送时自动绑定所选凭证";
       hint.style.color = "var(--dsw-text-tertiary, #98a2b3)";
       panel.append(label, mode, credential, hint);
       panel._workbuddyMode = mode;
@@ -306,9 +306,13 @@ window.__ModuleLoader__.load({
       }
       panel.hidden = false;
       panel.style.setProperty("display", "flex", "important");
-      const mode = preferredMode === "token" && tokenAvailable || preferredMode === "api-key" && apiAvailable
+      const suggestedMode = status.suggestedBinding?.mode;
+      const modeAvailable = (value) => value === "token" ? tokenAvailable : value === "api-key" && apiAvailable;
+      const mode = modeAvailable(preferredMode)
         ? preferredMode
-        : status.mode === "token" && tokenAvailable ? "token" : "api-key";
+        : modeAvailable(suggestedMode)
+          ? suggestedMode
+          : status.mode === "token" && tokenAvailable ? "token" : "api-key";
       const modeSelect = panel._workbuddyMode;
       const credentialSelect = panel._workbuddyCredential;
       modeSelect.replaceChildren();
@@ -328,9 +332,11 @@ window.__ModuleLoader__.load({
         option.disabled = entry.disabled === true;
         return option;
       }));
-      const activeId = mode === "token" ? status.activeAccountId : status.activeApiKeyId;
+      const activeId = mode === "token"
+        ? status.suggestedAccountId ?? status.activeAccountId
+        : status.suggestedApiKeyId ?? status.activeApiKeyId;
       if (activeId && options.some((entry) => entry.id === activeId && !entry.disabled)) credentialSelect.value = activeId;
-      panel._workbuddyHint.textContent = "会话创建后可在底部单独切换";
+      panel._workbuddyHint.textContent = "发送时自动绑定所选凭证";
       panel._workbuddyHint.style.color = "var(--dsw-text-tertiary, #98a2b3)";
     }
 
@@ -466,48 +472,75 @@ window.__ModuleLoader__.load({
       const credentialOptions = state.mode === "token"
         ? (Array.isArray(state.accounts) ? state.accounts.map((account) => createElement("option", { key: account.id, value: account.id }, accountText(account))) : [])
         : (Array.isArray(state.apiKeys) ? state.apiKeys.map((key) => createElement("option", { key: key.id, value: key.id, disabled: key.configured === false }, apiKeyText(key))) : []);
+      const confirmBindingChange = (message) => typeof window === "undefined" || window.confirm(message);
+      const applyBindingResult = async (result) => {
+        setState(result);
+        if (result.mode === "token" && result.activeAccountId) {
+          try {
+            const credits = await authRequest("credits", { accountId: result.activeAccountId }, sessionId);
+            setState({ ...result, ...credits, creditLoading: false });
+          } catch (error) {
+            setState({
+              ...result,
+              credits: null,
+              creditLoading: false,
+              creditError: error instanceof Error ? error.message : "查询 WorkBuddy 积分失败",
+              todayUsage: null,
+              todayUsageError: "查询 WorkBuddy 今日请求量失败",
+            });
+          }
+        }
+      };
+      const bindCredential = async (mode, value, failureMessage) => {
+        try {
+          const result = mode === "token"
+            ? await authRequest("token", { accountId: value }, sessionId)
+            : await authRequest("api-key", { keyId: value }, sessionId);
+          await applyBindingResult(result);
+        } catch (error) {
+          setState({ ...state, creditError: error instanceof Error ? error.message : failureMessage });
+        }
+      };
       const onSessionCredentialChange = async (event) => {
         if (!state.routingEnabled || !sessionId) return;
         const value = event.target.value;
-        try {
-          const result = state.mode === "token"
-            ? await authRequest("token", { accountId: value }, sessionId)
-            : await authRequest("api-key", { keyId: value }, sessionId);
-          setState(result);
-          if (result.mode === "token" && result.activeAccountId) {
-            const credits = await authRequest("credits", { accountId: result.activeAccountId }, sessionId);
-            setState({ ...result, ...credits, creditLoading: false });
-          }
-        } catch (error) {
-          setState({ ...state, creditError: error instanceof Error ? error.message : "切换会话凭证失败" });
+        if (!confirmBindingChange("切换后，当前已发出的请求继续使用原凭证；后续模型调用将使用新凭证。确定切换吗？")) {
+          event.target.value = state.mode === "token" ? state.activeAccountId ?? "" : state.activeApiKeyId ?? "";
+          return;
         }
+        await bindCredential(state.mode, value, "切换会话凭证失败");
       };
       const onSessionModeChange = async (event) => {
         if (!state.routingEnabled || !sessionId) return;
         const mode = event.target.value;
         const value = mode === "token" ? state.accounts?.[0]?.id : state.apiKeys?.find((key) => key.configured)?.id;
         if (!value) return;
+        if (!confirmBindingChange("切换后，当前已发出的请求继续使用原凭证；后续模型调用将使用新凭证。确定切换认证模式吗？")) {
+          event.target.value = state.mode;
+          return;
+        }
+        await bindCredential(mode, value, "切换会话认证模式失败");
+      };
+      const onUnbind = async () => {
+        if (!state.routingEnabled || !sessionId || !state.sessionBinding) return;
+        if (!confirmBindingChange("解除后，当前会话将在下一次模型调用时绑定当前默认凭证。确定解除吗？")) return;
         try {
-          const result = mode === "token"
-            ? await authRequest("token", { accountId: value }, sessionId)
-            : await authRequest("api-key", { keyId: value }, sessionId);
-          setState(result);
-          if (result.mode === "token" && result.activeAccountId) {
-            const credits = await authRequest("credits", { accountId: result.activeAccountId }, sessionId);
-            setState({ ...result, ...credits, creditLoading: false });
-          }
+          await applyBindingResult(await authRequest("unbind", {}, sessionId));
         } catch (error) {
-          setState({ ...state, creditError: error instanceof Error ? error.message : "切换会话认证模式失败" });
+          setState({ ...state, creditError: error instanceof Error ? error.message : "解除会话凭证失败" });
         }
       };
+      const actionStyle = { border: "0", padding: "0 2px", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", cursor: "pointer", textDecoration: "underline" };
       const sessionControls = state.routingEnabled && sessionId ? createElement(
         "span",
         { "data-workbuddy-session-controls": true, style: { display: "inline-flex", alignItems: "center", justifyContent: "flex-end", flex: "1 1 100%", flexWrap: "wrap", gap: "4px", minWidth: 0, maxWidth: "100%" } },
+        createElement("span", { title: state.sessionBinding ? "当前会话已使用独立凭证" : "当前会话未绑定，下次发送将固化当前默认凭证" }, state.sessionBinding ? "已绑定" : "未绑定"),
         createElement("select", { value: state.mode, onChange: onSessionModeChange, "aria-label": "当前会话认证模式", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "110px" } },
           createElement("option", { value: "token" }, "令牌"),
           createElement("option", { value: "api-key" }, "API Key"),
         ),
         createElement("select", { value: state.mode === "token" ? state.activeAccountId ?? "" : state.activeApiKeyId ?? "", onChange: onSessionCredentialChange, "aria-label": "当前会话凭证", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "190px" } }, credentialOptions),
+        state.sessionBinding ? createElement("button", { type: "button", onClick: onUnbind, title: "解除当前绑定，下次发送时重新绑定默认凭证", style: actionStyle }, "解除绑定") : null,
         createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 2px" } }, "·"),
       ) : null;
       return createElement(

@@ -23,6 +23,7 @@ import {
   parseWorkBuddySessionRouting,
   refreshWorkBuddySession,
   serializeWorkBuddySession,
+  serializeWorkBuddySessionRouting,
   serializeWorkBuddySessions,
   sessionCacheDeadline,
   sessionNeedsRefresh,
@@ -373,14 +374,10 @@ function runtimeHeaders(headers, requestContext) {
   });
 }
 
-function sessionBindingFor(routing, sessionId, runtimeScoped = false) {
+function sessionBindingFor(routing, sessionId) {
   if (!routing?.enabled) return undefined;
   const id = typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : undefined;
-  if (id && Object.hasOwn(routing.bindings, id)) return routing.bindings[id];
-  // ponytail: a new session can have an unbound id on its first request, so
-  // keep the recent default for that path. Only a truly missing runtime id
-  // must fail over to the global provider auth instead of another session.
-  return runtimeScoped && !id ? undefined : routing.lastUsed;
+  return id && Object.hasOwn(routing.bindings, id) ? routing.bindings[id] : undefined;
 }
 
 function normalizedProviderName(value) {
@@ -579,6 +576,25 @@ export function apply(ctx, config) {
     const value = stored?.value ?? env.get(ref)?.value;
     return value ? parseWorkBuddySessionRouting(value) : createWorkBuddySessionRoutingState();
   };
+  let routingBindingQueue = Promise.resolve();
+  const persistDefaultSessionBinding = (sessionId, fallbackBinding) => {
+    const task = routingBindingQueue.then(async () => {
+      const latest = await readSessionRouting();
+      const existing = sessionBindingFor(latest, sessionId);
+      if (existing) return existing;
+      const binding = latest.lastUsed ?? fallbackBinding;
+      if (!binding) return undefined;
+      const credentials = ctx.get("credentials");
+      if (!credentials) throw new Error("DSH 凭据服务不可用，无法保存会话认证");
+      await credentials.set(credentialRef(WORKBUDDY_SESSION_ROUTING_REF), serializeWorkBuddySessionRouting({
+        ...latest,
+        bindings: { ...latest.bindings, [sessionId]: binding },
+      }));
+      return binding;
+    });
+    routingBindingQueue = task.then(() => undefined, () => undefined);
+    return task;
+  };
 
   const resolveLoginSession = async (requestedId) => {
     const key = typeof requestedId === "string" && requestedId ? requestedId : "active";
@@ -633,12 +649,31 @@ export function apply(ctx, config) {
   };
 
   const resolveCredential = async (provider, profile, context = requestContext.getStore()) => {
-    const runtimeContext = context;
     context ??= {};
     const ref = profile.apiKeyEnv;
     const routing = WORKBUDDY_PROVIDERS.has(provider) ? await readSessionRouting() : createWorkBuddySessionRoutingState();
     const sessionId = context?.sessionId ? String(context.sessionId) : undefined;
-    const binding = sessionBindingFor(routing, sessionId, runtimeContext !== undefined);
+    let binding = sessionBindingFor(routing, sessionId);
+    if (WORKBUDDY_PROVIDERS.has(provider) && routing.enabled && sessionId && !binding) {
+      let fallbackBinding;
+      if (!routing.lastUsed) {
+        if (ref) fallbackBinding = { mode: "api-key", apiKeyRef: ref };
+        else {
+          try {
+            const active = await resolveLoginSession();
+            fallbackBinding = { mode: "token", accountId: active.sessionId };
+          } catch (error) {
+            throw new LlmError(`${name}: 没有可用于当前会话的默认 WorkBuddy 凭证`, "MISSING_CREDENTIAL", { cause: error });
+          }
+        }
+      }
+      try {
+        binding = await persistDefaultSessionBinding(sessionId, fallbackBinding);
+      } catch (error) {
+        throw new LlmError(`${name}: 无法保存当前会话的 WorkBuddy 凭证绑定`, "MISSING_CREDENTIAL", { cause: error });
+      }
+      if (!binding) throw new LlmError(`${name}: 没有可用于当前会话的默认 WorkBuddy 凭证`, "MISSING_CREDENTIAL");
+    }
     if (WORKBUDDY_PROVIDERS.has(provider) && binding?.mode === "token") {
       let session;
       try {
