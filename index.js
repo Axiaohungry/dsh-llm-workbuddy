@@ -30,6 +30,7 @@ import {
   upsertWorkBuddySession,
 } from "./workbuddy-auth.js";
 import { installWorkBuddyWeb } from "./workbuddy-web.js";
+import { probeEndpoint } from "./workbuddy-discovery.js";
 
 export { Config };
 
@@ -48,6 +49,8 @@ const BASE_URL = "https://copilot.tencent.com/v2";
 const CONFIG_URL = "https://copilot.tencent.com/v3/config";
 const USER_AGENT = "CLI/unknown CodeBuddy/2.137.1";
 const STREAM_IDLE_TIMEOUT_MS = 300_000;
+const traceContext = new AsyncLocalStorage();
+let nextTraceId = 0;
 const NO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 const THINKING_LEVELS = ["off", ...EFFORTS];
@@ -60,17 +63,74 @@ const COMPAT = {
 };
 
 function workBuddyRequestOptions(options) {
+  const trace = traceContext.getStore();
+  const fetchImpl = options?.fetch ?? globalThis.fetch;
   return {
     ...options,
     timeoutMs: options?.timeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
     headers: { ...(options?.headers ?? {}), "user-agent": USER_AGENT },
+    ...(trace ? { fetch: async (input, init) => {
+      const started = Date.now();
+      traceEvent(trace, "http.start");
+      try {
+        const response = await fetchImpl(input, init);
+        traceEvent(trace, "http.headers", { elapsedMs: Date.now() - started, status: response.status });
+        return response;
+      } catch (error) {
+        traceEvent(trace, "http.error", { elapsedMs: Date.now() - started, ...errorFields(error) });
+        throw error;
+      }
+    } } : {}),
   };
+}
+
+function errorFields(error) {
+  const safe = (value) => typeof value === "string" && /^[A-Za-z_][A-Za-z_0-9-]{0,39}$/.test(value) ? value : undefined;
+  return {
+    ...(safe(error?.name) ? { errorName: safe(error.name) } : {}),
+    ...(safe(error?.code) ? { errorCode: safe(error.code) } : {}),
+    ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
+  };
+}
+
+function traceEvent(trace, stage, details = {}) {
+  if (!trace) return;
+  console.info("[dsh-llm-workbuddy]", JSON.stringify({ request: trace.id, stage, ...details }));
+}
+
+function observedWorkBuddyStream(model, context, options) {
+  const trace = traceContext.getStore();
+  const started = Date.now();
+  const stream = openAICompletionsApi.streamSimple(model, context, workBuddyRequestOptions(options));
+  return (async function* () {
+    traceEvent(trace, "model.start");
+    let first = true;
+    let completed = false;
+    let failed = false;
+    try {
+      for await (const chunk of stream) {
+        if (first) {
+          first = false;
+          traceEvent(trace, "model.first-chunk", { elapsedMs: Date.now() - started });
+        }
+        yield chunk;
+      }
+      completed = true;
+      traceEvent(trace, "model.done", { elapsedMs: Date.now() - started });
+    } catch (error) {
+      failed = true;
+      traceEvent(trace, "model.error", { elapsedMs: Date.now() - started, ...errorFields(error) });
+      throw error;
+    } finally {
+      if (!completed && !failed) traceEvent(trace, "model.cancelled", { elapsedMs: Date.now() - started });
+    }
+  })();
 }
 
 const workBuddyApi = {
   ...openAICompletionsApi,
   stream: (model, context, options) => openAICompletionsApi.stream(model, context, workBuddyRequestOptions(options)),
-  streamSimple: (model, context, options) => openAICompletionsApi.streamSimple(model, context, workBuddyRequestOptions(options)),
+  streamSimple: observedWorkBuddyStream,
 };
 
 const FALLBACK_MODELS = [
@@ -481,13 +541,22 @@ function prepareWorkBuddyOptions(options, legacyReplay = true) {
 }
 
 function workBuddySource(config, source) {
-  const providers = config?.providers ?? {};
+  const providers = providerSettings(config);
   return Object.hasOwn(providers, PROVIDER) || Object.hasOwn(providers, LEGACY_PROVIDER)
     ? source
     : { ...source, apiKeyEnv: source.apiKeyEnv ?? API_KEY_ENV };
 }
 
+function providerSettings(config) {
+  return typeof config?.providers?.get === "function" ? config.providers.get() : config?.providers ?? {};
+}
+
 function installSettingsCompat(ctx, ns, schema, entry, hooks) {
+  if (typeof entry?.providers?.get === "function") {
+    return ctx.inject(["settings"], (child) => {
+      child.effect(() => child.settings.configure({ auto: false }, ctx.fiber));
+    });
+  }
   if (typeof dshSettings.installSettingsSection === "function") {
     return dshSettings.installSettingsSection(ctx, ns, schema, entry, hooks);
   }
@@ -499,15 +568,18 @@ function installSettingsCompat(ctx, ns, schema, entry, hooks) {
   });
 }
 
-export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddySource, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, normalizeWorkBuddyReplay, prepareWorkBuddyOptions, selectWorkBuddyModels, sessionBindingFor });
+export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddySource, providerSettings, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, normalizeWorkBuddyReplay, prepareWorkBuddyOptions, selectWorkBuddyModels, sessionBindingFor });
 
 export function apply(ctx, config) {
-  installWorkBuddyWeb(ctx);
+  const modernSettings = typeof config?.providers?.get === "function";
+  const settingsNs = modernSettings ? ctx.fiber?.entry?.options?.id ?? name : NS;
+  installWorkBuddyWeb(ctx, settingsNs);
   let current = () => config;
   const requestContext = new AsyncLocalStorage();
   let remoteModels;
   let generation = 0;
   let memoRaw;
+  let memoProviders;
   let memoGeneration = -1;
   let memoized;
   const loginSessionPromises = new Map();
@@ -516,7 +588,7 @@ export function apply(ctx, config) {
 
   const effectiveConfig = () => {
     const raw = current() ?? {};
-    const providers = raw.providers ?? {};
+    const providers = providerSettings(raw);
     const configured = providers[PROVIDER] ?? providers[LEGACY_PROVIDER];
     return {
       ...raw,
@@ -529,9 +601,11 @@ export function apply(ctx, config) {
 
   const profiles = () => {
     const raw = effectiveConfig();
-    if (memoRaw === current() && memoGeneration === generation && memoized) return memoized;
+    const configuredProviders = providerSettings(current());
+    if (memoRaw === current() && memoProviders === configuredProviders && memoGeneration === generation && memoized) return memoized;
     const result = new Map();
     for (const [provider, source] of Object.entries(raw.providers)) {
+      if (modernSettings && !WORKBUDDY_PROVIDERS.has(provider)) continue;
       if (!ownsProvider(provider, builtins, source)) continue;
       if (WORKBUDDY_PROVIDERS.has(provider)) {
         const sourceWithAuth = workBuddySource(current(), source);
@@ -563,6 +637,7 @@ export function apply(ctx, config) {
       result.set(provider, resolvedProfile(provider, source, selected, configured));
     }
     memoRaw = current();
+    memoProviders = configuredProviders;
     memoGeneration = generation;
     memoized = result;
     return result;
@@ -631,7 +706,16 @@ export function apply(ctx, config) {
         if (!active) throw new Error("未找到 WorkBuddy 登录账号");
         let session = active;
         if (sessionNeedsRefresh(session)) {
-          session = { ...session, ...(await refreshWorkBuddySession(session)), updatedAt: Date.now() };
+          const trace = traceContext.getStore();
+          const started = Date.now();
+          traceEvent(trace, "auth.refresh-start");
+          try {
+            session = { ...session, ...(await refreshWorkBuddySession(session)), updatedAt: Date.now() };
+            traceEvent(trace, "auth.refresh-done", { elapsedMs: Date.now() - started });
+          } catch (error) {
+            traceEvent(trace, "auth.refresh-error", { elapsedMs: Date.now() - started, ...errorFields(error) });
+            throw error;
+          }
           const nextStore = {
             ...store,
             sessions: store.sessions.map((entry) => entry.id === session.id ? session : entry),
@@ -722,22 +806,57 @@ export function apply(ctx, config) {
     throw new LlmError(`${name}: Provider "${provider}" 缺少 API Key，请在 WebUI 的模型设置中填写`, "MISSING_CREDENTIAL");
   };
 
-  const resolveApiKey = async (provider, profile) => (await resolveCredential(provider, profile)).value;
+  const resolveApiKey = async (provider, profile) => {
+    const trace = WORKBUDDY_PROVIDERS.has(provider) ? traceContext.getStore() : undefined;
+    const started = Date.now();
+    traceEvent(trace, "auth.start");
+    try {
+      const credential = await resolveCredential(provider, profile);
+      traceEvent(trace, "auth.done", { elapsedMs: Date.now() - started, mode: credential.kind });
+      return credential.value;
+    } catch (error) {
+      traceEvent(trace, "auth.error", { elapsedMs: Date.now() - started, ...errorFields(error) });
+      throw error;
+    }
+  };
 
   const adapter = new PiAiAdapter({
     profiles,
     resolveApiKey,
     resolveAttachments: () => ctx.get("attachments"),
   });
+  const refreshPromises = new Map();
+  const refreshWorkBuddyModels = async (provider, signal) => {
+    const profile = profiles().get(provider);
+    const credential = await resolveCredential(provider, profile);
+    const cacheKey = credential.kind === "bearer" ? `token:${credential.sessionId ?? "active"}` : `api:${credential.ref ?? API_KEY_ENV}`;
+    if (remoteModels && remoteModelsKey === cacheKey) return;
+    let pending = refreshPromises.get(cacheKey);
+    if (!pending) {
+      pending = (async () => {
+        remoteModels = await fetchWorkBuddyModels(credential, signal);
+        remoteModelsKey = cacheKey;
+        generation += 1;
+      })().finally(() => refreshPromises.delete(cacheKey));
+      refreshPromises.set(cacheKey, pending);
+    }
+    return pending;
+  };
+  const ensureWorkBuddyModel = async (provider, model, signal) => {
+    if (!WORKBUDDY_PROVIDERS.has(provider)) return;
+    if (profiles().get(provider)?.piProvider.getModels().some((entry) => entry.id === model)) return;
+    await refreshWorkBuddyModels(provider, signal);
+  };
   const sessionScopedStream = (stream, options) => {
-    const context = { sessionId: options?.sessionId === undefined ? undefined : String(options.sessionId), headers: {} };
-    const source = requestContext.run(context, () => stream(options));
+    const context = { sessionId: options?.sessionId === undefined ? undefined : String(options.sessionId), headers: {}, id: ++nextTraceId };
+    const run = (action) => traceContext.run(context, () => requestContext.run(context, action));
+    const source = run(() => stream(options));
     const iterator = source[Symbol.asyncIterator]();
     return {
       [Symbol.asyncIterator]() { return this; },
-      next(value) { return requestContext.run(context, () => iterator.next(value)); },
-      return(value) { return requestContext.run(context, () => iterator.return?.(value) ?? Promise.resolve({ done: true, value })); },
-      throw(error) { return requestContext.run(context, () => iterator.throw?.(error) ?? Promise.reject(error)); },
+      next(value) { return run(() => iterator.next(value)); },
+      return(value) { return run(() => iterator.return?.(value) ?? Promise.resolve({ done: true, value })); },
+      throw(error) { return run(() => iterator.throw?.(error) ?? Promise.reject(error)); },
     };
   };
   const adapterStream = adapter.stream.bind(adapter);
@@ -750,6 +869,7 @@ export function apply(ctx, config) {
   if (!legacyAdapter) {
     const adapterPrepareCall = adapter.prepareCall.bind(adapter);
     adapter.prepareCall = async (...args) => {
+      await ensureWorkBuddyModel(args[0], args[1], args[2]);
       const prepared = await adapterPrepareCall(...args);
       return {
         ...prepared,
@@ -767,6 +887,7 @@ export function apply(ctx, config) {
   }
   const resolveModel = adapter.resolveModel.bind(adapter);
   adapter.resolveModel = async (provider, model, signal) => {
+    await ensureWorkBuddyModel(provider, model, signal);
     const resolved = await resolveModel(provider, model, signal);
     if (!WORKBUDDY_PROVIDERS.has(provider) || !resolved.reasoning) return resolved;
     const configured = profiles().get(provider)?.piProvider.getModels().find((entry) => entry.id === model);
@@ -775,39 +896,28 @@ export function apply(ctx, config) {
     return { ...resolved, reasoning: { ...resolved.reasoning, defaultEffort: effort } };
   };
   const listModels = adapter.listModels.bind(adapter);
-  let refreshPromise;
   adapter.listModels = async (provider) => {
     if (WORKBUDDY_PROVIDERS.has(provider)) {
-      refreshPromise ??= (async () => {
-        try {
-          const profile = profiles().get(provider);
-          const credential = await resolveCredential(provider, profile);
-          const cacheKey = credential.kind === "bearer" ? `token:${credential.sessionId ?? "active"}` : `api:${credential.ref ?? API_KEY_ENV}`;
-          if (remoteModels && remoteModelsKey === cacheKey) return;
-          remoteModels = await fetchWorkBuddyModels(credential);
-          remoteModelsKey = cacheKey;
-          generation += 1;
-        } catch {
-          // Keep the built-in catalog available while the key or network is absent.
-        }
-      })().finally(() => {
-        refreshPromise = undefined;
-      });
-      await refreshPromise;
+      try {
+        await refreshWorkBuddyModels(provider);
+      } catch {
+        // Keep the built-in catalog available while the key or network is absent.
+      }
     }
     return listModels(provider);
   };
 
-  const directoryEntries = () => [{
+  const workBuddyDirectory = () => [{
     provider: PROVIDER,
     displayName: DISPLAY_NAME,
-    settingsNs: NS,
+    settingsNs,
     settingsPath: ["providers", PROVIDER],
     declared: false,
-  }, ...[...builtins.values()].flatMap((provider) => provider.auth?.apiKey ? [{
+  }];
+  const directoryEntries = () => modernSettings ? workBuddyDirectory() : [...workBuddyDirectory(), ...[...builtins.values()].flatMap((provider) => provider.auth?.apiKey ? [{
     provider: provider.id,
     displayName: provider.name,
-    settingsNs: NS,
+    settingsNs,
     settingsPath: ["providers", provider.id],
     declared: false,
   }] : []), ...Object.entries(effectiveConfig().providers ?? {}).flatMap(([provider, source]) => {
@@ -815,7 +925,7 @@ export function apply(ctx, config) {
     return [{
       provider,
       displayName: source.displayName ?? provider,
-      settingsNs: NS,
+      settingsNs,
       settingsPath: ["providers", provider],
       declared: true,
     }];
@@ -824,13 +934,14 @@ export function apply(ctx, config) {
   let directory = ctx.llm.registerConfigurableProviders(directoryEntries());
   let registration = ctx.llm.registerAdapter([...profiles().keys()], adapter);
 
-  ctx.llm.registerModelDiscovery(NS, async (request) => {
+  ctx.llm.registerModelDiscovery(settingsNs, async (request, signal) => {
+    const discoverySignal = signal ?? request.signal;
     if (WORKBUDDY_PROVIDERS.has(request.provider)) {
       const profile = profiles().get(request.provider);
       const credential = request.apiKey
         ? { value: request.apiKey, kind: "api-key", ref: API_KEY_ENV }
         : await resolveCredential(request.provider, profile);
-      remoteModels = await fetchWorkBuddyModels(credential, request.signal);
+      remoteModels = await fetchWorkBuddyModels(credential, discoverySignal);
       remoteModelsKey = credential.kind === "bearer" ? `token:${credential.sessionId ?? "active"}` : `api:${credential.ref ?? API_KEY_ENV}`;
       generation += 1;
       return remoteModels.map((model) => ({
@@ -841,7 +952,7 @@ export function apply(ctx, config) {
       }));
     }
     const provider = builtins.get(request.provider);
-    if (!provider) throw new LlmError(`没有 Provider "${request.provider ?? ""}" 的模型目录`, "DISCOVERY_FAILED");
+    if (!provider) return probeEndpoint({ ...request, signal: discoverySignal }, { profiles, resolveCredential });
     return provider.getModels().map((model) => ({
       id: model.id,
       name: model.name,
@@ -853,15 +964,19 @@ export function apply(ctx, config) {
   // Keep WorkBuddy out of the settings base layer so it appears in WebUI's
   // "Add provider" dropdown. The runtime profile above still exists as the
   // built-in implementation; selecting it only persists the credential ref.
-  installSettingsCompat(ctx, NS, Config, config ?? { providers: {} }, {
+  const refreshRegistrations = () => {
+    memoRaw = undefined;
+    const providers = profiles();
+    registration.replace([...providers.keys()]);
+    directory.replace(directoryEntries());
+  };
+  if (modernSettings) ctx.on("loader/volatile-update", refreshRegistrations);
+  installSettingsCompat(ctx, settingsNs, Config, config ?? { providers: {} }, {
     setSource(source) {
       current = source;
     },
     onChange() {
-      memoRaw = undefined;
-      const providers = profiles();
-      registration.replace([...providers.keys()]);
-      directory.replace(directoryEntries());
+      refreshRegistrations();
     },
   });
 }

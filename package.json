@@ -1,6 +1,6 @@
 {
   "name": "@axiaohungry/dsh-llm-workbuddy",
-  "version": "1.3.18",
+  "version": "1.3.19",
   "description": "通过 WorkBuddy API Key 或 WorkBuddy 登录令牌为 DeepSeek Harness 接入 WorkBuddy 模型",
   "author": "Axiaohungry",
   "keywords": [
@@ -30,6 +30,7 @@
   },
   "files": [
     "index.js",
+    "workbuddy-discovery.js",
     "workbuddy-auth.js",
     "workbuddy-credits.js",
     "workbuddy-web.js",
@@ -41,11 +42,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check workbuddy-auth.js && node --check workbuddy-credits.js && node --check workbuddy-web.js && node --check client.js && node --check cli.js && node --test test.js && node cli.js --self-test"
+    "check": "node --check index.js && node --check workbuddy-discovery.js && node --check workbuddy-auth.js && node --check workbuddy-credits.js && node --check workbuddy-web.js && node --check client.js && node --check cli.js && node --test test.js && node cli.js --self-test"
   },
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.2-alpha.2 <0.2.0"
+      "dsh": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7"
     },
     "client": {
       "inject": [
@@ -64,11 +65,11 @@
     "yaml": "2.9.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-credentials": ">=0.1.2-alpha.2 <0.2.0",
-    "@deepseek-ai/dsh-launch-environment": ">=0.1.2-alpha.2 <0.2.0",
-    "@deepseek-ai/dsh-llm": ">=0.1.2-alpha.2 <0.2.0",
-    "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.2-alpha.2 <0.2.0",
-    "@deepseek-ai/dsh-settings": ">=0.1.2-alpha.2 <0.2.0",
+    "@deepseek-ai/dsh-credentials": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7",
+    "@deepseek-ai/dsh-launch-environment": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7",
+    "@deepseek-ai/dsh-llm": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7",
+    "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7",
+    "@deepseek-ai/dsh-settings": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7",
     "react": "^18.2.0"
   },
   "engines": {

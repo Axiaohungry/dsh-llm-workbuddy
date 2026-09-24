@@ -65,6 +65,18 @@ function runDsh(args) {
   if (result.status !== 0) throw new Error(`dsh ${args.join(" ")} 执行失败（退出码 ${result.status}）`);
 }
 
+function usesEntrySettings() {
+  const result = spawnSync(process.platform === "win32" ? "dsh.cmd" : "dsh", ["--version"], {
+    encoding: "utf8",
+    shell: process.platform === "win32",
+    env: dshEnv(),
+  });
+  if (result.error || result.status !== 0) throw new Error("无法检测 DSH 版本，请确认 dsh 命令可用");
+  const version = String(result.stdout).match(/\b0\.1\.(\d+)(?:[-.]|\b)/);
+  if (!version) throw new Error("无法识别 DSH 版本，令牌已保存；请在模型设置中手动选择令牌登录");
+  return Number(version[1]) >= 7;
+}
+
 function writeYamlDocument(file, document) {
   const temporary = join(dirname(file), `.workbuddy-${process.pid}.tmp`);
   writeFileSync(temporary, String(document), "utf8");
@@ -180,8 +192,12 @@ async function login() {
     else console.log(`无法自动打开浏览器，请手动访问：${url}`);
   });
   storeLoginSession(session);
-  enableTokenLogin();
-  console.log("WorkBuddy 令牌登录成功，Provider 已切换为令牌模式。请重启 DSH。");
+  if (usesEntrySettings()) {
+    console.log("WorkBuddy 令牌登录成功。新版 DSH 按插件条目保存配置，请在模型设置的 WorkBuddy 卡片中选择“令牌登录”；无需安装 WorkBuddy CLI。");
+  } else {
+    enableTokenLogin();
+    console.log("WorkBuddy 令牌登录成功，Provider 已切换为令牌模式。请重启 DSH。");
+  }
 }
 
 function install() {

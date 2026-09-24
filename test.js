@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { __testing } from "./index.js";
+import { __testing, apply } from "./index.js";
 import {
   workBuddyApiKeyEntries,
   activeWorkBuddySession,
@@ -22,8 +22,268 @@ import {
   upsertWorkBuddyApiKey,
   upsertWorkBuddySession,
 } from "./workbuddy-auth.js";
-import { authenticationMode } from "./workbuddy-web.js";
+import { authenticationMode, installWorkBuddyWeb, __testing as webTesting } from "./workbuddy-web.js";
 import { __testing as creditsTesting, fetchWorkBuddyCredits } from "./workbuddy-credits.js";
+import { probeEndpoint } from "./workbuddy-discovery.js";
+
+test("自定义 OpenAI Provider 可从端点读取模型目录，并优先使用本次输入的 Key", async () => {
+  const previous = globalThis.fetch;
+  let observed;
+  globalThis.fetch = async (url, options) => {
+    observed = { url, options };
+    return new Response(JSON.stringify({ data: [
+      { id: "model-a", name: "Model A", context_window: 128000, max_output_tokens: 8192 },
+      { id: "" },
+    ] }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const models = await probeEndpoint({ provider: "my-provider", api: "openai-responses", apiKey: "new-key" }, {
+      profiles: () => new Map([["my-provider", { baseURL: "https://example.test/v1/", headers: { "x-extra": "yes" } }]]),
+      resolveCredential: () => { throw new Error("输入新 Key 时不应读取旧凭证"); },
+    });
+    assert.equal(observed.url, "https://example.test/v1/models");
+    assert.equal(observed.options.headers.get("authorization"), "Bearer new-key");
+    assert.equal(observed.options.headers.get("x-extra"), "yes");
+    assert.deepEqual(models, [{ id: "model-a", name: "Model A", contextWindow: 128000, maxTokens: 8192 }]);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("自定义 Anthropic Provider 使用对应端点和认证头", async () => {
+  const previous = globalThis.fetch;
+  let observed;
+  globalThis.fetch = async (url, options) => {
+    observed = { url, options };
+    return new Response(JSON.stringify({ data: [{ id: "claude-test", display_name: "Claude Test" }] }), { status: 200 });
+  };
+  try {
+    const models = await probeEndpoint({ provider: "anthropic-custom", baseURL: "https://example.test", api: "anthropic-messages" }, {
+      profiles: () => new Map([["anthropic-custom", { headers: { authorization: "Bearer stale" } }]]),
+      resolveCredential: async () => ({ value: "saved-key" }),
+    });
+    assert.equal(observed.url, "https://example.test/v1/models?limit=1000");
+    assert.equal(observed.options.headers.get("x-api-key"), "saved-key");
+    assert.equal(observed.options.headers.get("authorization"), null);
+    assert.equal(observed.options.headers.get("anthropic-version"), "2023-06-01");
+    assert.deepEqual(models, [{ id: "claude-test", name: "Claude Test" }]);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("富模型目录忽略非对象项，超限响应被拒绝", async () => {
+  const previous = globalThis.fetch;
+  const discovery = () => probeEndpoint({ baseURL: "https://example.test/v1" }, {
+    profiles: () => new Map(), resolveCredential: async () => undefined,
+  });
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ models: {
+      "model-b": { name: "Model B", limit: { context: 64000 }, top_provider: { max_completion_tokens: 4096 } },
+      invalid: "not-a-model",
+    } }), { status: 200 });
+    assert.deepEqual(await discovery(), [{ id: "model-b", name: "Model B", contextWindow: 64000, maxTokens: 4096 }]);
+    globalThis.fetch = async () => new Response("oversized", { status: 200, headers: { "content-length": String(4 * 1024 * 1024 + 1) } });
+    await assert.rejects(discovery(), (error) => error.code === "DISCOVERY_FAILED" && /4 MiB/.test(error.message));
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("模型探测的失败保留可操作错误，且不回显凭证", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => new Response("unauthorized", { status: 401 });
+  try {
+    await assert.rejects(
+      probeEndpoint({ provider: "custom", baseURL: "https://example.test/v1", apiKey: "secret-value" }, {
+        profiles: () => new Map(), resolveCredential: async () => undefined,
+      }),
+      (error) => error.code === "DISCOVERY_FAILED" && /401/.test(error.message) && !error.message.includes("secret-value"),
+    );
+    await assert.rejects(
+      probeEndpoint({ baseURL: "https://example.test/v1", api: "unsupported" }, {
+        profiles: () => new Map(), resolveCredential: async () => undefined,
+      }),
+      (error) => error.code === "DISCOVERY_UNSUPPORTED",
+    );
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("当前 DSH 适配器在无 WebUI 的调用前拉取新模型并完成 prepareCall", async () => {
+  const previous = globalThis.fetch;
+  let adapter;
+  let discover;
+  let requestCount = 0;
+  const ctx = {
+    inject() {},
+    get(key) {
+      if (key === "launchEnvironment") return { get: () => undefined };
+      if (key === "credentials") return {
+        resolve: async (ref) => String(ref).includes("WORKBUDDY_API_KEY") ? { value: "test-key" } : undefined,
+      };
+      return undefined;
+    },
+    llm: {
+      registerConfigurableProviders: () => ({ replace() {} }),
+      registerAdapter: (_providers, value) => { adapter = value; return { replace() {} }; },
+      registerModelDiscovery: (_ns, value) => { discover = value; },
+    },
+  };
+  globalThis.fetch = async (url) => {
+    assert.equal(url, "https://copilot.tencent.com/v3/config");
+    requestCount += 1;
+    return new Response(JSON.stringify({ code: 0, data: {
+      agents: [{ name: "cli", models: ["deepseek-v4.1-flash"] }],
+      models: [{ id: "deepseek-v4.1-flash", name: "Deepseek V4.1 Flash", maxInputTokens: 128000, maxOutputTokens: 8192 }],
+    } }), { status: 200 });
+  };
+  try {
+    apply(ctx, { providers: {} });
+    const prepared = await adapter.prepareCall("workbuddy-cn", "deepseek-v4.1-flash");
+    assert.equal(prepared.model.id, "deepseek-v4.1-flash");
+    assert.equal(typeof prepared.stream, "function");
+    assert.equal(requestCount, 1);
+    const controller = new AbortController();
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, "https://example.test/v1/models");
+      assert.strictEqual(options.signal, controller.signal);
+      return new Response(JSON.stringify({ data: [{ id: "custom-model" }] }), { status: 200 });
+    };
+    assert.deepEqual(await discover({ baseURL: "https://example.test/v1", apiKey: "test-key" }, controller.signal), [{ id: "custom-model" }]);
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+test("新旧 DSH 配置都注册 WorkBuddy，next 使用插件条目命名空间", () => {
+  const registered = [];
+  const directories = [];
+  const discoveries = [];
+  const listeners = new Map();
+  const injected = [];
+  const ctx = {
+    fiber: { entry: { options: { id: "llm-workbuddy" } } },
+    inject(names, callback) { injected.push({ names, callback }); },
+    on(event, callback) { listeners.set(event, callback); },
+    llm: {
+      registerConfigurableProviders(entries) {
+        directories.push(entries);
+        return { replace(next) { directories.push(next); } };
+      },
+      registerAdapter(providers) {
+        registered.push(providers);
+        return { replace(next) { registered.push(next); } };
+      },
+      registerModelDiscovery(ns) { discoveries.push(ns); },
+    },
+  };
+  const reactive = { providers: { get: () => ({
+    "custom-gateway": { api: "openai-completions", baseURL: "https://example.test/v1", models: [{ id: "custom-model" }] },
+  }) } };
+  assert.ok(__testing.providerSettings(reactive)["custom-gateway"]);
+  apply(ctx, reactive);
+  assert.deepEqual(registered[0], ["workbuddy-cn"]);
+  assert.deepEqual(directories[0].map((entry) => entry.provider), ["workbuddy-cn"]);
+  assert.equal(directories[0][0].settingsNs, "llm-workbuddy");
+  assert.deepEqual(discoveries, ["llm-workbuddy"]);
+  assert.ok(listeners.has("loader/volatile-update"));
+  assert.ok(injected.some(({ names }) => names.includes("settings")));
+
+  const legacy = { ...ctx, on: undefined, inject() {} };
+  registered.length = directories.length = discoveries.length = 0;
+  apply(legacy, { providers: {} });
+  assert.deepEqual(registered[0], ["workbuddy-cn"]);
+  assert.equal(directories[0][0].settingsNs, "llm-pi-ai");
+  assert.deepEqual(discoveries, ["llm-pi-ai"]);
+});
+
+test("认证模式写入新旧 DSH 各自的配置命名空间", async () => {
+  for (const modern of [false, true]) {
+    const ns = modern ? "llm-workbuddy" : "llm-pi-ai";
+    const calls = [];
+    const service = {
+      ...(modern
+        ? { describe: () => [{ ns, value: { providers: {} } }] }
+        : { get: () => ({ providers: {} }) }),
+      mutate: async (target, ops) => { calls.push({ target, ops }); },
+    };
+    await webTesting.setMode(webTesting.settingsAccess(service, ns), "token");
+    assert.equal(calls[0].target, ns);
+    assert.deepEqual(calls[0].ops[0].path, ["providers", "workbuddy-cn"]);
+  }
+});
+
+test("新版 WorkBuddy 卡片保留旧版认证入口并提供模型编辑", () => {
+  const client = readFileSync(new URL("./client.js", import.meta.url), "utf8");
+  assert.match(client, /settings\.models\.provider-card/);
+  assert.match(client, /key: "llm-workbuddy"/);
+  assert.match(client, /mount\(input\)/);
+  assert.match(client, /mountModelEditor\(models\)/);
+  assert.equal(webTesting.validModelOverrides([{ id: "glm-5.3", contextWindow: 262144, maxTokens: 32768 }]), true);
+  assert.equal(webTesting.validModelOverrides([{ id: "duplicate" }, { id: "duplicate" }]), false);
+  assert.equal(webTesting.validModelOverrides([{ id: "bad", maxTokens: -1 }]), false);
+});
+
+test("新版模型接口只修改 WorkBuddy 条目并保留认证模式", async () => {
+  const routes = new Map();
+  let providers = { "workbuddy-cn": {} };
+  let revision = 4;
+  const settings = {
+    describe: () => [{ ns: "llm-workbuddy", value: { providers }, revision }],
+    mutate: async (ns, ops, expected) => {
+      assert.equal(ns, "llm-workbuddy");
+      assert.equal(expected, revision);
+      assert.deepEqual(ops[0].path, ["providers", "workbuddy-cn", "models"]);
+      providers = { "workbuddy-cn": { ...providers["workbuddy-cn"], models: ops[0].value } };
+      revision++;
+    },
+  };
+  installWorkBuddyWeb({ inject: (_services, callback) => callback({
+    settings,
+    credentials: {},
+    llm: { discoverModels: async () => [{ id: "glm-5.3" }] },
+    webServer: { register: ({ path, handler }) => { routes.set(path, handler); return () => {}; } },
+    effect: (callback) => callback(),
+  }) }, "llm-workbuddy");
+  const handler = routes.get("/dsh-llm-workbuddy/auth/models");
+  async function call(method, body) {
+    let response;
+    const req = {
+      method,
+      url: "/dsh-llm-workbuddy/auth/models",
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { origin: "http://localhost:3000" },
+      async *[Symbol.asyncIterator]() { if (body) yield Buffer.from(JSON.stringify(body)); },
+    };
+    await handler(req, {
+      writeHead(status) { response = { status }; },
+      end(text) { response.body = JSON.parse(text); },
+    });
+    return response;
+  }
+  assert.deepEqual((await call("GET")).body, { ok: true, models: null, revision: 4 });
+  assert.deepEqual((await call("POST", { action: "discover" })).body.models, [{ id: "glm-5.3" }]);
+  const saved = await call("POST", { action: "save", revision: 4, models: [{ id: "glm-5.3" }] });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(providers["workbuddy-cn"], { models: [{ id: "glm-5.3" }] });
+  assert.equal((await call("POST", { action: "save", models: [{ id: "bad", maxTokens: -1 }] })).status, 400);
+});
+
+test("旧版接管 pi-ai，新版保留内置 pi-ai 供自定义 Provider 使用", () => {
+  const patch = readFileSync(new URL("./cordis.patch.yml", import.meta.url), "utf8");
+  const expression = patch.match(/disabled: !!js >-\r?\n((?: {4}[^\r\n]+\r?\n)+)/)?.[1]
+    .trim().replace(/\r?\n\s*/g, " ");
+  assert.ok(expression);
+  const disabled = new Function("ctx", "process", `return (${expression})`);
+  const ctx = { get: () => ({ installAnchor: "dsh-package.json" }) };
+  const host = (version) => ({ getBuiltinModule: () => ({ readFileSync: () => JSON.stringify({ version }) }) });
+  assert.equal(disabled(ctx, host("0.1.6")), true);
+  assert.equal(disabled(ctx, host("0.1.7-rc.1")), false);
+  assert.equal(disabled(ctx, host("0.1.8")), false);
+  assert.equal(disabled({ get: () => undefined }, host("0.1.8")), true);
+});
 
 test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", () => {
   const client = readFileSync(new URL("./client.js", import.meta.url), "utf8");

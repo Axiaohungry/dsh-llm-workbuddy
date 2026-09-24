@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
     const PENDING_MARKER = "data-workbuddy-new-session-selector";
     const WORKBUDDY_PROVIDER_PATTERN = /(?:^|-)(?:work-?buddy|code-?buddy)(?:-|$)/;
     const React = require("react");
-    const { createElement, useEffect, useState } = React;
+    const { createElement, useEffect, useRef, useState } = React;
 
     function isWorkBuddyProvider(value) {
       const normalized = String(value ?? "")
@@ -1053,6 +1053,222 @@ window.__ModuleLoader__.load({
         });
     }
 
+    function mountModelEditor(host) {
+      const heading = document.createElement("strong");
+      heading.textContent = "模型目录";
+      const actions = row();
+      const fetchButton = button("获取可用模型");
+      const addButton = button("添加模型");
+      const resetButton = button("恢复在线目录");
+      const saveButton = button("保存模型");
+      const list = document.createElement("div");
+      const candidates = document.createElement("div");
+      const message = document.createElement("span");
+      message.setAttribute("role", "status");
+      message.setAttribute("aria-live", "polite");
+      Object.assign(host.style, { display: "flex", flexDirection: "column", gap: "10px", width: "100%" });
+      Object.assign(list.style, { display: "flex", flexDirection: "column", gap: "8px" });
+      Object.assign(message.style, { fontSize: "12px", minHeight: "18px" });
+      actions.append(fetchButton, addButton, resetButton, saveButton);
+      host.append(heading, actions, list, candidates, message);
+      let models = null;
+      let revision;
+      let busy = false;
+      const invalidReasoning = new Set();
+      const say = (value, error = false) => {
+        message.textContent = value;
+        message.style.color = error ? "var(--dsw-text-danger, #c62828)" : "var(--dsw-text-secondary, #667085)";
+      };
+      const setBusy = (value) => {
+        busy = value;
+        for (const control of [fetchButton, addButton, resetButton, saveButton]) control.disabled = value;
+      };
+      const makeInput = (value, label, onChange, type = "text") => {
+        const input = textInput(type, label, label);
+        input.value = value ?? "";
+        input.title = label;
+        input.addEventListener("input", () => onChange(input.value));
+        return input;
+      };
+      const render = () => {
+        list.replaceChildren();
+        if (models === null) {
+          const hint = document.createElement("span");
+          hint.textContent = "使用当前账号的在线模型目录；获取后可选择模型进行自定义。";
+          list.append(hint);
+          return;
+        }
+        for (const [index, model] of models.entries()) {
+          const item = section();
+          const fields = row();
+          const id = makeInput(model.id, "模型 ID", (value) => { model.id = value.trim(); });
+          const name = makeInput(model.name, "显示名称", (value) => { model.name = value; });
+          const context = makeInput(model.contextWindow, "上下文窗口", (value) => {
+            if (value) model.contextWindow = Number(value);
+            else delete model.contextWindow;
+          }, "number");
+          const output = makeInput(model.maxTokens, "最大输出 Token", (value) => {
+            if (value) model.maxTokens = Number(value);
+            else delete model.maxTokens;
+          }, "number");
+          for (const input of [id, name, context, output]) {
+            input.style.flex = "1 1 140px";
+            fields.append(input);
+          }
+          const imageLabel = document.createElement("label");
+          const images = document.createElement("input");
+          images.type = "checkbox";
+          images.checked = model.input?.includes("image") === true;
+          images.addEventListener("change", () => { model.input = images.checked ? ["text", "image"] : ["text"]; });
+          imageLabel.append(images, " 图片输入");
+          const remove = button("删除");
+          remove.addEventListener("click", () => { invalidReasoning.delete(model); models.splice(index, 1); render(); });
+          fields.append(imageLabel, remove);
+          item.append(fields);
+          if (model.reasoningEfforts !== undefined) {
+            const thinking = document.createElement("details");
+            const summary = document.createElement("summary");
+            summary.textContent = "模型思考档位";
+            const editor = document.createElement("textarea");
+            editor.setAttribute("aria-label", `${model.id} 思考档位 JSON`);
+            editor.value = JSON.stringify(model.reasoningEfforts);
+            editor.style.width = "100%";
+            editor.addEventListener("change", () => {
+              try {
+                const value = JSON.parse(editor.value);
+                if (value !== false && (!value || typeof value !== "object" || Array.isArray(value))) throw new Error();
+                model.reasoningEfforts = value;
+                invalidReasoning.delete(model);
+                say("");
+              } catch { invalidReasoning.add(model); say("思考档位 JSON 格式无效", true); }
+            });
+            thinking.append(summary, editor);
+            item.append(thinking);
+          }
+          list.append(item);
+        }
+      };
+      fetch(`${ROUTE}/models`, { cache: "no-store" })
+        .then((response) => response.json())
+        .then((state) => {
+          if (!state.ok) throw new Error(state.message);
+          models = state.models?.map((model) => ({ ...model })) ?? null;
+          revision = state.revision;
+          render();
+        })
+        .catch((error) => say(error instanceof Error ? error.message : "读取模型失败", true));
+      addButton.addEventListener("click", () => {
+        models ??= [];
+        models.push({ id: "", name: "" });
+        render();
+        list.lastElementChild?.querySelector('input[aria-label="模型 ID"]')?.focus();
+      });
+      fetchButton.addEventListener("click", async () => {
+        if (busy) return;
+        setBusy(true);
+        say("正在获取模型…");
+        try {
+          const result = await request("models", { action: "discover" });
+          candidates.replaceChildren();
+          const choices = result.models.filter((model) => !models?.some((existing) => existing.id === model.id));
+          if (!choices.length) return say("没有新的可用模型");
+          const selected = new Set();
+          for (const model of choices) {
+            const label = document.createElement("label");
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.addEventListener("change", () => checkbox.checked ? selected.add(model.id) : selected.delete(model.id));
+            label.append(checkbox, ` ${model.name || model.id} (${model.id})`);
+            Object.assign(label.style, { display: "block", fontSize: "13px" });
+            candidates.append(label);
+          }
+          const addSelected = button("添加选中模型");
+          addSelected.addEventListener("click", () => {
+            models ??= [];
+            models.push(...choices.filter((model) => selected.has(model.id)).map((model) => ({ ...model })));
+            candidates.replaceChildren();
+            render();
+          });
+          candidates.append(addSelected);
+          say(`获取到 ${result.models.length} 个模型，请选择后保存`);
+        } catch (error) { say(error instanceof Error ? error.message : "获取模型失败", true); }
+        finally { setBusy(false); }
+      });
+      saveButton.addEventListener("click", async () => {
+        if (busy || models === null) return;
+        if (invalidReasoning.size) return say("请先修正模型思考档位 JSON", true);
+        if (models.some((model) => !model.id || !Number.isSafeInteger(model.contextWindow ?? 1)
+          || !Number.isSafeInteger(model.maxTokens ?? 1))) return say("请检查模型 ID 和 Token 数值", true);
+        setBusy(true);
+        try {
+          const result = await request("models", { action: "save", models, revision });
+          revision = result.revision;
+          say("模型已保存");
+        } catch (error) { say(error instanceof Error ? error.message : "保存模型失败", true); }
+        finally { setBusy(false); }
+      });
+      resetButton.addEventListener("click", async () => {
+        if (busy || !window.confirm("恢复在线模型目录？自定义模型列表会被移除。")) return;
+        setBusy(true);
+        try {
+          const result = await request("models", { action: "reset", revision });
+          models = null;
+          revision = result.revision;
+          candidates.replaceChildren();
+          render();
+          say("已恢复在线模型目录");
+        } catch (error) { say(error instanceof Error ? error.message : "恢复失败", true); }
+        finally { setBusy(false); }
+      });
+      render();
+    }
+
+    function WorkBuddySettingsCard({ provider }) {
+      const root = useRef(null);
+      useEffect(() => {
+        if (provider?.provider !== "workbuddy-cn" || !root.current) return;
+        const host = root.current;
+        const field = section();
+        const input = document.createElement("input");
+        input.setAttribute("aria-label", "API 密钥");
+        field.append(input);
+        host.append(field);
+        mount(input);
+        const models = section();
+        host.append(models);
+        mountModelEditor(models);
+        const scope = host.closest("li") ?? host.closest('[role="tabpanel"]') ?? host.closest('[class*="_addPanel"]');
+        const hidden = new Map();
+        const hideNative = () => {
+          if (!scope) return;
+          for (const node of scope.querySelectorAll('[class*="_editor"], [class*="_rowActions"]')) {
+            if (node.contains(host) || host.contains(node) || hidden.has(node)) continue;
+            hidden.set(node, {
+              hidden: node.hidden,
+              display: node.style.getPropertyValue("display"),
+              priority: node.style.getPropertyPriority("display"),
+            });
+            node.hidden = true;
+            node.style.setProperty("display", "none", "important");
+          }
+        };
+        const observer = scope ? new MutationObserver(hideNative) : undefined;
+        observer?.observe(scope, { childList: true, subtree: true });
+        hideNative();
+        return () => {
+          observer?.disconnect();
+          for (const [node, previous] of hidden) {
+            node.hidden = previous.hidden;
+            if (previous.display) node.style.setProperty("display", previous.display, previous.priority);
+            else node.style.removeProperty("display");
+          }
+        };
+      }, [provider?.provider]);
+      return provider?.provider === "workbuddy-cn"
+        ? createElement("div", { ref: root, "data-workbuddy-settings-card": "" })
+        : null;
+    }
+
     function enhance() {
       for (const input of document.querySelectorAll('input[aria-label="API 密钥"]')) {
         if (isWorkBuddy(input)) mount(input);
@@ -1062,6 +1278,10 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       installComposerDockLayout();
+      ctx.slots.inject("settings.models.provider-card", () => ctx.slots.register({
+        name: "settings.models.provider-card",
+        key: "llm-workbuddy",
+      }, WorkBuddySettingsCard));
       ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
         name: "conversation.composer.dock",
         id: "workbuddy-credits",
