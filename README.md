@@ -2,7 +2,7 @@
 
 为 DeepSeek Harness（DSH）增加 `WorkBuddy 中国区` Provider。插件通过
 WorkBuddy 提供的 API Key，或 WorkBuddy 中国站的网页登录令牌调用模型，并在
-DSH WebUI 中管理模型和认证方式。
+DSH WebUI 或桌面端中管理模型和认证方式。
 
 > [!IMPORTANT]
 > API Key 来自 **WorkBuddy**，用于调用供 WorkBuddy 使用的模型服务。本插件是第三方
@@ -10,7 +10,7 @@ DSH WebUI 中管理模型和认证方式。
 
 ## 功能
 
-- 在 DSH WebUI 中使用 `WorkBuddy 中国区`；
+- 在 DSH WebUI 和桌面端使用 `WorkBuddy 中国区`；
 - 支持 WorkBuddy API Key 和 WorkBuddy 中国站账号令牌；
 - 两种认证模式互相独立，可以随时切换；
 - API Key 支持环境变量、多个 DSH 保存值，并可通过下拉列表切换；
@@ -38,8 +38,10 @@ DSH WebUI 中管理模型和认证方式。
 插件兼容旧版 DSH 和 `0.1.7-rc.1`（`next`）的按插件条目管理配置方式。
 旧版由插件接管 `llm-pi-ai`；`next` 保留内置 `llm-pi-ai` 处理自定义提供方，
 WorkBuddy 使用自己的配置条目。升级后请完整退出并重新启动 DSH，再检查模型卡片与凭证模式。
-桌面版 DSH `0.2.0-rc.2` 同样保留内置 `llm-pi-ai`；请从桌面端「插件 → 添加插件」
-安装本插件。下方的命令行安装器仅管理 `web` 和 `headless` Profile，不会安装到桌面端。
+`1.3.21` 适配桌面版 DSH `0.2.0-rc.2` 的模型调用、插件详情页认证设置和会话级凭证控件；
+同时保留旧版 DSH 的适配器调用路径，以及 `web` / `headless` Profile 的安装方式。
+桌面端已验证实际模型回复；旧版 Web/Headless 路径通过自动化检查，未在本次更新中重新实机调用。
+桌面版同样保留内置 `llm-pi-ai`，由 WorkBuddy 插件使用自己的配置条目。
 在 `next` 上，命令行 `login` 只保存令牌；认证模式需在 WorkBuddy 模型卡片中选择
 “令牌登录”，不会再写入旧版 `settings.yaml`。`next` 的模型页通过插件扩展位显示
 WorkBuddy 专属认证与模型管理区域；旧版 DSH 继续使用原有编辑界面。
@@ -53,6 +55,8 @@ npx --yes @axiaohungry/dsh-llm-workbuddy@latest install
 ```
 
 安装器会为 DSH 的 `web` 和 `headless` Profile 安装插件。安装完成后重启 DSH。
+桌面端请在「设置 → 插件 → 添加插件」中安装 `@axiaohungry/dsh-llm-workbuddy`，
+再打开该插件的详情页配置认证与模型；上面的命令行安装器不会安装到桌面 Profile。
 只使用 WebUI 时，也可以单独安装 Web Profile：
 
 ```powershell
@@ -69,16 +73,19 @@ API Key 和令牌凭据会保留。
 新版本内部 Provider ID 为 `workbuddy-cn`。旧配置中的 `codebuddy-cn` 会在运行时兼容，并在
 切换认证模式时迁移为新 ID。
 
-## WebUI 配置
+## WebUI / 桌面端配置
 
 打开 **设置 → 模型**。在 `next` 中，点击“添加模型提供商”，从“第三方模型提供商”
-选择 `WorkBuddy 中国区`；已配置后直接编辑它的模型卡片。旧版 DSH 继续从提供方列表
-添加或编辑。认证区域有两个模式按钮：
+选择 `WorkBuddy 中国区`；已配置后直接编辑它的模型卡片。桌面版 `0.2.0-rc.2` 请在
+「设置 → 插件」打开 WorkBuddy 插件详情页，使用其中的认证与模型管理区域；旧版 DSH
+继续从提供方列表添加或编辑。认证区域有两个模式按钮：
 
 - `API Key`：只显示 API Key 来源和新增 Key 功能；
 - `令牌登录`：只显示令牌账号、登录、切换以及账号用量信息。
 
 切换模式后，另一种模式的账号或 Key 控件会隐藏，不会同时占用页面空间。
+会话输入框底部的账号/API Key 选择仅在开启下述“会话级账号/API Key”后显示；
+令牌积分在令牌模式下显示，与该开关无关。API Key 模式不显示令牌积分。
 
 ### 可选：会话级账号/API Key
 
