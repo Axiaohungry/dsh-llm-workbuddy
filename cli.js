@@ -65,6 +65,13 @@ function runDsh(args) {
   if (result.status !== 0) throw new Error(`dsh ${args.join(" ")} 执行失败（退出码 ${result.status}）`);
 }
 
+function entrySettingsVersion(output) {
+  const version = String(output).match(/\b(\d+)\.(\d+)\.(\d+)(?:[-.]|\b)/);
+  if (!version) return undefined;
+  const [, major, minor, patch] = version.map(Number);
+  return major > 0 || minor > 1 || (minor === 1 && patch >= 7);
+}
+
 function usesEntrySettings() {
   const result = spawnSync(process.platform === "win32" ? "dsh.cmd" : "dsh", ["--version"], {
     encoding: "utf8",
@@ -72,9 +79,9 @@ function usesEntrySettings() {
     env: dshEnv(),
   });
   if (result.error || result.status !== 0) throw new Error("无法检测 DSH 版本，请确认 dsh 命令可用");
-  const version = String(result.stdout).match(/\b0\.1\.(\d+)(?:[-.]|\b)/);
-  if (!version) throw new Error("无法识别 DSH 版本，令牌已保存；请在模型设置中手动选择令牌登录");
-  return Number(version[1]) >= 7;
+  const modern = entrySettingsVersion(result.stdout);
+  if (modern === undefined) throw new Error("无法识别 DSH 版本，令牌已保存；请在模型设置中手动选择令牌登录");
+  return modern;
 }
 
 function writeYamlDocument(file, document) {
@@ -237,6 +244,9 @@ function uninstall(home = dshHome()) {
 function selfTest() {
   const root = mkdtempSync(join(tmpdir(), "dsh-workbuddy-cli-"));
   try {
+    if (entrySettingsVersion("dsh 0.1.6") !== false || entrySettingsVersion("dsh 0.1.7-rc.1") !== true || entrySettingsVersion("dsh 0.2.0-rc.2") !== true) {
+      throw new Error("DSH version detection self-test failed");
+    }
     const file = join(root, "settings.yaml");
     writeFileSync(file, "llm-pi-ai:\n  providers:\n    opencode-go:\n      apiKeyEnv: OPENCODE_GO_API_KEY\n    codebuddy-cn:\n      apiKeyEnv: WORKBUDDY_CN_API_KEY\n      models:\n        - id: legacy-model\n", "utf8");
     enableTokenLogin(root);

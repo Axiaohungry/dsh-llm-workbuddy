@@ -3,7 +3,7 @@
     !ctx.get('profileContext')?.installAnchor ||
     Number(JSON.parse(process.getBuiltinModule('fs').readFileSync(
     ctx.get('profileContext').installAnchor, 'utf8')).version
-    .match(/^0\.1\.(\d+)/)?.[1] ?? 0) < 7
+    .match(/^0\.1\.(\d+)/)?.[1] ?? 7) < 7
 
 - insert:
     - id: llm-workbuddy

@@ -26,6 +26,17 @@ import { authenticationMode, installWorkBuddyWeb, __testing as webTesting } from
 import { __testing as creditsTesting, fetchWorkBuddyCredits } from "./workbuddy-credits.js";
 import { probeEndpoint } from "./workbuddy-discovery.js";
 
+test("桌面端页面可调用本机认证接口，外部来源仍被拒绝", () => {
+  const req = (address, origin) => ({ socket: { remoteAddress: address }, headers: { origin } });
+  assert.equal(webTesting.localPost(req("127.0.0.1", "dsh-app://app")), true);
+  assert.equal(webTesting.localPost(req("127.0.0.1", "dsh-app://evil")), false);
+  assert.equal(webTesting.localPost(req("192.0.2.1", "dsh-app://app")), false);
+  const desktop = { socket: { remoteAddress: "127.0.0.1" }, headers: { "user-agent": "Mozilla/5.0 @deepseek-ai/dsh-desktop/0.2.0-rc.2 Electron/44.0.0" } };
+  assert.equal(webTesting.localPost(desktop), true);
+  assert.equal(webTesting.localPost({ ...desktop, socket: { remoteAddress: "192.0.2.1" } }), false);
+  assert.equal(webTesting.localPost({ ...desktop, headers: { "user-agent": "Mozilla/5.0" } }), false);
+});
+
 test("自定义 OpenAI Provider 可从端点读取模型目录，并优先使用本次输入的 Key", async () => {
   const previous = globalThis.fetch;
   let observed;
@@ -157,6 +168,57 @@ test("当前 DSH 适配器在无 WebUI 的调用前拉取新模型并完成 prep
   }
 });
 
+test("桌面端 prepared stream 能发送文本并收到首个模型输出", async () => {
+  const previous = globalThis.fetch;
+  let adapter;
+  const ctx = {
+    inject() {},
+    get(key) {
+      if (key === "launchEnvironment") return { get: () => undefined };
+      if (key === "credentials") return {
+        resolve: async (ref) => String(ref).includes("WORKBUDDY_API_KEY") ? { value: "test-key" } : undefined,
+      };
+      return undefined;
+    },
+    llm: {
+      registerConfigurableProviders: () => ({ replace() {} }),
+      registerAdapter: (_providers, value) => { adapter = value; return { replace() {} }; },
+      registerModelDiscovery() {},
+    },
+  };
+  globalThis.fetch = async (url, options) => {
+    if (String(url).endsWith("/v3/config")) return new Response(JSON.stringify({ code: 0, data: {
+      agents: [{ name: "cli", models: ["deepseek-v4.1-flash"] }],
+      models: [{ id: "deepseek-v4.1-flash", maxInputTokens: 128000, maxOutputTokens: 8192 }],
+    } }), { status: 200 });
+    assert.match(String(url), /\/v2\/chat\/completions$/);
+    assert.equal(new Headers(options.headers).get("authorization"), "Bearer test-key");
+    return new Response([
+      'data: {"id":"test","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}',
+      'data: {"id":"test","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+      "data: [DONE]",
+      "",
+    ].join("\n\n"), { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  try {
+    apply(ctx, { providers: {} });
+    const prepared = await adapter.prepareCall("workbuddy-cn", "deepseek-v4.1-flash");
+    for (const request of [
+      { messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
+      { messages: [{ role: "system", content: [{ type: "text", text: "系统提示" }] }, { role: "user", content: [{ type: "text", text: "你好" }] }] },
+      { tools: [{ name: "test", description: "test", parameters: { type: "object", properties: {} } }], messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
+      { system: "系统提示", maxTokens: 128, purpose: "title", messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
+    ]) {
+      const chunks = [];
+      for await (const chunk of prepared.stream({ provider: "workbuddy-cn", model: "deepseek-v4.1-flash", sessionId: "desktop-test", ...request })) chunks.push(chunk);
+      assert.ok(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "你好"), JSON.stringify(chunks));
+      assert.ok(chunks.some((chunk) => chunk.type === "finish" && chunk.reason?.kind === "stop"), JSON.stringify(chunks));
+    }
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
 test("新旧 DSH 配置都注册 WorkBuddy，next 使用插件条目命名空间", () => {
   const registered = [];
   const directories = [];
@@ -219,6 +281,7 @@ test("新版 WorkBuddy 卡片保留旧版认证入口并提供模型编辑", () 
   const client = readFileSync(new URL("./client.js", import.meta.url), "utf8");
   assert.match(client, /settings\.models\.provider-card/);
   assert.match(client, /key: "llm-workbuddy"/);
+  assert.match(client, /name: "plugins\.detail\.section",\s*id: "llm-workbuddy"/);
   assert.match(client, /mount\(input\)/);
   assert.match(client, /mountModelEditor\(models\)/);
   assert.equal(webTesting.validModelOverrides([{ id: "glm-5.3", contextWindow: 262144, maxTokens: 32768 }]), true);
@@ -282,6 +345,7 @@ test("旧版接管 pi-ai，新版保留内置 pi-ai 供自定义 Provider 使用
   assert.equal(disabled(ctx, host("0.1.6")), true);
   assert.equal(disabled(ctx, host("0.1.7-rc.1")), false);
   assert.equal(disabled(ctx, host("0.1.8")), false);
+  assert.equal(disabled(ctx, host("0.2.0-rc.2")), false);
   assert.equal(disabled({ get: () => undefined }, host("0.1.8")), true);
 });
 
@@ -307,6 +371,8 @@ test("客户端兼容包装 Provider 并将 WorkBuddy 用量并入统计行", ()
   assert.match(client, /state\.routingEnabled && sessionId \? createElement/);
   assert.match(client, /const seats = Array\.from\(document\.querySelectorAll\("\[data-composer-seat\]"\)\)/);
   assert.match(client, /for \(const panel of panels\) panel\.remove\(\)/);
+  assert.match(client, /ctx\.slots\.inject\("plugins\.detail\.section"/);
+  assert.match(client, /subject\?\.kind === "bundle" && subject\.pkg\?\.name === "@axiaohungry\/dsh-llm-workbuddy"/);
   assert.match(index, /const legacyAdapter = typeof adapter\.prepareCall !== "function"/);
   assert.match(index, /adapter\.prepareCall = async \(provider, model, signal\)/);
   assert.match(index, /persistDefaultSessionBinding/);

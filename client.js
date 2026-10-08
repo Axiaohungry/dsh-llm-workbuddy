@@ -1223,7 +1223,7 @@ window.__ModuleLoader__.load({
       render();
     }
 
-    function WorkBuddySettingsCard({ provider }) {
+    function WorkBuddySettingsCard({ provider, embedded = false }) {
       const root = useRef(null);
       useEffect(() => {
         if (provider?.provider !== "workbuddy-cn" || !root.current) return;
@@ -1237,7 +1237,7 @@ window.__ModuleLoader__.load({
         const models = section();
         host.append(models);
         mountModelEditor(models);
-        const scope = host.closest("li") ?? host.closest('[role="tabpanel"]') ?? host.closest('[class*="_addPanel"]');
+        const scope = embedded ? null : host.closest("li") ?? host.closest('[role="tabpanel"]') ?? host.closest('[class*="_addPanel"]');
         const hidden = new Map();
         const hideNative = () => {
           if (!scope) return;
@@ -1269,6 +1269,12 @@ window.__ModuleLoader__.load({
         : null;
     }
 
+    function WorkBuddyPluginDetails({ subject }) {
+      return subject?.kind === "bundle" && subject.pkg?.name === "@axiaohungry/dsh-llm-workbuddy"
+        ? createElement(WorkBuddySettingsCard, { provider: { provider: "workbuddy-cn" }, embedded: true })
+        : null;
+    }
+
     function enhance() {
       for (const input of document.querySelectorAll('input[aria-label="API 密钥"]')) {
         if (isWorkBuddy(input)) mount(input);
@@ -1282,6 +1288,10 @@ window.__ModuleLoader__.load({
         name: "settings.models.provider-card",
         key: "llm-workbuddy",
       }, WorkBuddySettingsCard));
+      ctx.slots.inject("plugins.detail.section", () => ctx.slots.register({
+        name: "plugins.detail.section",
+        id: "llm-workbuddy",
+      }, WorkBuddyPluginDetails));
       ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
         name: "conversation.composer.dock",
         id: "workbuddy-credits",

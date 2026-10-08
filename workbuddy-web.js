@@ -52,7 +52,9 @@ function localPost(req) {
   const loopback = address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
   if (!loopback) return false;
   const origin = req.headers.origin;
-  if (!origin) return req.headers["sec-fetch-site"] === "same-origin";
+  if (!origin) return req.headers["sec-fetch-site"] === "same-origin"
+    || /(?:^|\s)@deepseek-ai\/dsh-desktop\/\d/.test(req.headers["user-agent"] ?? "");
+  if (origin === "dsh-app://app") return true;
   try {
     return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(origin).hostname);
   } catch {
@@ -134,7 +136,7 @@ function validModelOverrides(models) {
   return true;
 }
 
-export const __testing = Object.freeze({ settingsAccess, setMode, validModelOverrides });
+export const __testing = Object.freeze({ settingsAccess, setMode, validModelOverrides, localPost });
 
 function maskApiKey(value) {
   const text = typeof value === "string" ? value : "";
