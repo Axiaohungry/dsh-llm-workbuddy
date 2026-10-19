@@ -346,6 +346,7 @@ test("旧版接管 pi-ai，新版保留内置 pi-ai 供自定义 Provider 使用
   assert.equal(disabled(ctx, host("0.1.7-rc.1")), false);
   assert.equal(disabled(ctx, host("0.1.8")), false);
   assert.equal(disabled(ctx, host("0.2.0-rc.2")), false);
+  assert.equal(disabled(ctx, host("0.2.1-rc.2")), false);
   assert.equal(disabled({ get: () => undefined }, host("0.1.8")), true);
 });
 

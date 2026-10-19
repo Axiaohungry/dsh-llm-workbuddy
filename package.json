@@ -1,6 +1,6 @@
 {
   "name": "@axiaohungry/dsh-llm-workbuddy",
-  "version": "1.3.21",
+  "version": "1.3.22",
   "description": "通过 WorkBuddy API Key 或 WorkBuddy 登录令牌为 DeepSeek Harness 接入 WorkBuddy 模型",
   "author": "Axiaohungry",
   "keywords": [
@@ -46,7 +46,7 @@
   },
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || 0.2.0-rc.2"
+      "dsh": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || >=0.2.0-0 <0.3.0-0"
     },
     "client": {
       "inject": [
@@ -65,11 +65,11 @@
     "yaml": "2.9.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-credentials": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || 0.2.0-rc.2",
-    "@deepseek-ai/dsh-launch-environment": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || 0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || 0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || 0.2.0-rc.2",
-    "@deepseek-ai/dsh-settings": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || 0.2.0-rc.2",
+    "@deepseek-ai/dsh-credentials": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || >=0.2.0-0 <0.3.0-0",
+    "@deepseek-ai/dsh-launch-environment": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || >=0.2.0-0 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || >=0.2.0-0 <0.3.0-0",
+    "@deepseek-ai/dsh-llm-pi-ai": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || >=0.2.0-0 <0.3.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.1.2-alpha.2 <0.2.0 || >=0.1.5-rc.3 <0.1.5 || >=0.1.7-rc.1 <0.1.7 || >=0.2.0-0 <0.3.0-0",
     "react": "^18.2.0"
   },
   "engines": {
