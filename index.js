@@ -61,6 +61,66 @@ const COMPAT = {
   maxTokensField: "max_tokens",
   thinkingFormat: "openai",
 };
+const IDENTITY_SENTENCE_RE = /\bYou are an?(?:\s+AI)?(?:\s+coding)?\s+(?:agent\s+powered by|assistant\s+built on)[^\r\n]*?(?:\.(?=\s|$)|(?=\r?\n|$))/gi;
+
+function sanitizeWorkBuddyRequest(init) {
+  if (typeof init?.body !== "string") return init;
+  let body;
+  try { body = JSON.parse(init.body); } catch { return init; }
+  if (!Array.isArray(body?.messages)) return init;
+  const rewrite = (text) => text.replace(IDENTITY_SENTENCE_RE, "You are a helpful AI assistant.");
+  let changed = false;
+  const messages = body.messages.map((message) => {
+    if (!["system", "developer"].includes(message?.role)) return message;
+    let content = message.content;
+    if (typeof content === "string") content = rewrite(content);
+    else if (Array.isArray(content)) {
+      const parts = content.map((part) => {
+        if (part?.type !== "text" || typeof part.text !== "string") return part;
+        const text = rewrite(part.text);
+        return text === part.text ? part : { ...part, text };
+      });
+      if (parts.some((part, index) => part !== content[index])) content = parts;
+    }
+    if (content === message.content) return message;
+    changed = true;
+    return { ...message, content };
+  });
+  return changed ? { ...init, body: JSON.stringify({ ...body, messages }) } : init;
+}
+
+async function normalizeWorkBuddyError(response, trace) {
+  if (response.ok || !response.body) return response;
+  const reader = response.clone().body.getReader();
+  try {
+    const chunks = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 16_384) return response;
+      chunks.push(value);
+    }
+    const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const code = String(data?.code ?? data?.error?.code ?? "");
+    if (!/^\d{1,9}(?:-\d{1,9})?$/.test(code)) return response;
+    const hint = code === "11128" || code === "11-128" ? "：渠道校验未通过，请检查客户端兼容性。" : "";
+    const headers = new Headers(response.headers);
+    headers.delete("content-length");
+    headers.delete("content-encoding");
+    headers.set("content-type", "application/json");
+    traceEvent(trace, "http.error-code", { status: response.status, upstreamCode: code });
+    // The SDK expects error.message; WorkBuddy's top-level code/msg otherwise becomes "no body".
+    return new Response(JSON.stringify({ error: { code, message: `WorkBuddy 请求失败（HTTP ${response.status}，业务码 ${code}）${hint}` } }), {
+      status: response.status, statusText: response.statusText, headers,
+    });
+  } catch {
+    return response;
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
 
 function workBuddyRequestOptions(options) {
   const trace = traceContext.getStore();
@@ -69,18 +129,18 @@ function workBuddyRequestOptions(options) {
     ...options,
     timeoutMs: options?.timeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
     headers: { ...(options?.headers ?? {}), "user-agent": USER_AGENT },
-    ...(trace ? { fetch: async (input, init) => {
+    fetch: async (input, init) => {
       const started = Date.now();
       traceEvent(trace, "http.start");
       try {
-        const response = await fetchImpl(input, init);
+        const response = await fetchImpl(input, sanitizeWorkBuddyRequest(init));
         traceEvent(trace, "http.headers", { elapsedMs: Date.now() - started, status: response.status });
-        return response;
+        return await normalizeWorkBuddyError(response, trace);
       } catch (error) {
         traceEvent(trace, "http.error", { elapsedMs: Date.now() - started, ...errorFields(error) });
         throw error;
       }
-    } } : {}),
+    },
   };
 }
 

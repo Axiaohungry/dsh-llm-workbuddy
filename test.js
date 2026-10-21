@@ -193,6 +193,10 @@ test("桌面端 prepared stream 能发送文本并收到首个模型输出", asy
     } }), { status: 200 });
     assert.match(String(url), /\/v2\/chat\/completions$/);
     assert.equal(new Headers(options.headers).get("authorization"), "Bearer test-key");
+    const body = JSON.parse(options.body);
+    for (const message of body.messages.filter((entry) => ["system", "developer"].includes(entry.role))) {
+      assert.doesNotMatch(JSON.stringify(message.content), /agent powered by|assistant built on/i);
+    }
     return new Response([
       'data: {"id":"test","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}',
       'data: {"id":"test","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
@@ -205,15 +209,22 @@ test("桌面端 prepared stream 能发送文本并收到首个模型输出", asy
     const prepared = await adapter.prepareCall("workbuddy-cn", "deepseek-v4.1-flash");
     for (const request of [
       { messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
-      { messages: [{ role: "system", content: [{ type: "text", text: "系统提示" }] }, { role: "user", content: [{ type: "text", text: "你好" }] }] },
+      { messages: [{ role: "system", content: [{ type: "text", text: "You are an AI agent powered by DeepSeek Harness.\n保留工作要求。" }] }, { role: "user", content: [{ type: "text", text: "你好" }] }] },
       { tools: [{ name: "test", description: "test", parameters: { type: "object", properties: {} } }], messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
-      { system: "系统提示", maxTokens: 128, purpose: "title", messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
+      { system: "You are a coding agent powered by the deepseek-v4.1-flash model.", maxTokens: 128, purpose: "title", messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
     ]) {
       const chunks = [];
       for await (const chunk of prepared.stream({ provider: "workbuddy-cn", model: "deepseek-v4.1-flash", sessionId: "desktop-test", ...request })) chunks.push(chunk);
       assert.ok(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "你好"), JSON.stringify(chunks));
       assert.ok(chunks.some((chunk) => chunk.type === "finish" && chunk.reason?.kind === "stop"), JSON.stringify(chunks));
     }
+    globalThis.fetch = async () => Response.json({ code: 11128, msg: "private-server-message" }, { status: 400 });
+    const failures = [];
+    for await (const chunk of prepared.stream({ provider: "workbuddy-cn", model: "deepseek-v4.1-flash", messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] })) failures.push(chunk);
+    const failure = failures.find((chunk) => chunk.type === "finish" && chunk.reason?.kind === "error");
+    assert.ok(failure);
+    assert.match(failure.reason.failure.message, /11128/);
+    assert.doesNotMatch(failure.reason.failure.message, /private-server-message/);
   } finally {
     globalThis.fetch = previous;
   }
@@ -575,6 +586,63 @@ test("模型请求恢复 WorkBuddy 官方 User-Agent", () => {
   assert.equal(options.headers["user-agent"], "deepseek-harness");
 
   assert.equal(__testing.workBuddyRequestOptions({ timeoutMs: 12_000 }).timeoutMs, 12_000);
+});
+
+test("WorkBuddy 出站身份句只改写系统指令，保留用户、工具和原始请求", async () => {
+  const fingerprint = "You are an AI agent powered by DeepSeek Harness.";
+  const plain = "DeepSeek Harness；You are an AI agent.；保留这些文本";
+  const body = {
+    model: "deepseek-v4.1-flash", stream: true, temperature: 0.5,
+    messages: [
+      { role: "system", content: `${fingerprint}\n保留开发约束。 ${plain}` },
+      { role: "developer", content: [
+        { type: "text", text: "YOU ARE A CODING AGENT POWERED BY THE deepseek-v4.1-flash MODEL." },
+        { type: "text", text: "You are an AI assistant built on DeepSeek.\n保留工具说明。" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,test" } },
+      ] },
+      { role: "user", content: fingerprint },
+      { role: "assistant", content: fingerprint, tool_calls: [{ id: "call-1", type: "function", function: { name: "run", arguments: JSON.stringify({ text: fingerprint }) } }] },
+      { role: "tool", tool_call_id: "call-1", content: fingerprint },
+    ],
+    tools: [{ type: "function", function: { name: "run", description: fingerprint, parameters: { type: "object" } } }],
+  };
+  const init = Object.freeze({ method: "POST", body: JSON.stringify(body), headers: Object.freeze({ authorization: "Bearer test-key" }) });
+  const response = new Response("streaming-success");
+  let sent;
+  const options = __testing.workBuddyRequestOptions({ fetch: async (_url, value) => { sent = value; return response; } });
+  assert.strictEqual(await options.fetch("https://copilot.tencent.com/v2/chat/completions", init), response);
+  const actual = JSON.parse(sent.body);
+  const expected = structuredClone(body);
+  expected.messages[0].content = `You are a helpful AI assistant.\n保留开发约束。 ${plain}`;
+  expected.messages[1].content[0].text = "You are a helpful AI assistant.";
+  expected.messages[1].content[1].text = "You are a helpful AI assistant.\n保留工具说明。";
+  assert.deepEqual(actual, expected);
+  assert.equal(init.body, JSON.stringify(body));
+  assert.strictEqual(sent.headers, init.headers);
+  const cleaned = sent;
+  await options.fetch("https://copilot.tencent.com/v2/chat/completions", cleaned);
+  assert.strictEqual(sent, cleaned);
+});
+
+test("WorkBuddy 上游业务码可见，错误正文不会泄露，成功响应保持流式", async () => {
+  const original = Response.json({ code: 11128, msg: "secret-value", displayTips: { zh: "private" } }, { status: 400 });
+  const options = __testing.workBuddyRequestOptions({ fetch: async () => original });
+  const response = await options.fetch("https://copilot.tencent.com/v2/chat/completions", {});
+  assert.equal(response.status, 400);
+  const text = await response.text();
+  assert.match(text, /11128/);
+  assert.match(text, /渠道校验/);
+  assert.doesNotMatch(text, /secret-value|private/);
+  assert.equal((await original.json()).code, 11128);
+
+  for (const body of ["not-json", JSON.stringify({ msg: "unknown" }), "x".repeat(32_768)]) {
+    const error = new Response(body, { status: 400 });
+    const result = await __testing.workBuddyRequestOptions({ fetch: async () => error }).fetch("https://copilot.tencent.com/v2/chat/completions", {});
+    assert.strictEqual(result, error);
+  }
+  const quota = await __testing.workBuddyRequestOptions({ fetch: async () => Response.json({ error: { code: 11101 } }, { status: 429 }) }).fetch("https://copilot.tencent.com/v2/chat/completions", {});
+  assert.equal(quota.status, 429);
+  assert.match(await quota.text(), /11101/);
 });
 
 test("显式空配置启用令牌模式，未配置时仍使用 API Key", () => {
