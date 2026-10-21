@@ -54,12 +54,24 @@ export function parseWorkBuddySessionRouting(value) {
 }
 
 const BASE_URL = "https://copilot.tencent.com/v2/plugin";
-const USER_AGENT = "CLI/unknown CodeBuddy/2.137.1";
+export function codeBuddyHeaders(input) {
+  const headers = new Headers(input);
+  for (const key of [...headers.keys()]) {
+    if (key.startsWith("x-stainless-")) headers.delete(key);
+  }
+  for (const [key, value] of Object.entries({
+    "user-agent": "CLI/2.171.0 CodeBuddy/2.171.0",
+    "x-product": "SaaS",
+    "x-ide-type": "CLI",
+    "x-ide-name": "CodeBuddy",
+    "x-ide-version": "2.171.0",
+  })) headers.set(key, value);
+  return Object.fromEntries(headers);
+}
 const REQUEST_HEADERS = {
   accept: "application/json",
   "content-type": "application/json",
-  "user-agent": USER_AGENT,
-  "x-product": "SaaS",
+  ...codeBuddyHeaders(),
 };
 const NO_ACCOUNT_HEADERS = {
   "X-No-Authorization": "true",

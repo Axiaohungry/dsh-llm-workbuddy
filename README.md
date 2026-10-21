@@ -278,15 +278,114 @@ dsh plugin --profile web list --depth 0
 用量栏会识别 `workbuddy` 或 `codebuddy` 词段的 Provider ID，因此通过 ModLens 等插件
 包装的 Provider（例如 `modlens-workbuddy-cn`）也可以显示当前账号用量。
 
-### 调用时报 `400` / `11128`
+### 调用时报 `400` / `11128`：1.3.25 修复说明
 
-`11128`（或 `11-128`）表示 WorkBuddy 的渠道校验未通过。插件会在发送请求时将
-system/developer 中特定的客户端身份介绍句改为中性介绍；用户消息、助手历史、工具参数
-和本地会话记录保持原样。其他角色中的品牌名称不会被批量替换。
+`11128`（或 `11-128`）是上游的渠道校验错误。历史会话先前成功，不能说明后续请求
+一定仍会被接受；新增的上下文或上游规则调整都可能改变结果。本次无法确定上游规则
+生效的准确时间，但通过同一凭据、端点和模型的对照请求，定位了可复现条件。
 
-上游错误响应包含数字业务码时，插件会在错误提示中保留 HTTP 状态和业务码，并只在日志
-记录这些诊断字段，不回显原始错误正文。`400` 不一定是渠道校验；业务码不同或仍然失败时，
-请根据实际错误继续排查，不要反复换账号或清空历史会话。
+#### 根因与对照证据
+
+`1.3.23` 仅处理开头的客户端身份介绍句，遗漏了 system/developer 中其余运行环境说明：
+
+```text
+You are interacting with the user through the DeepSeek Harness Web GUI…
+The runtime context names the DeepSeek Harness implementation checkout…
+```
+
+2026-10-21 对照结果：
+
+| 请求条件 | 结果 |
+| --- | --- |
+| 最小文本、单图请求，使用旧版或新版请求头 | 均成功 |
+| 历史请求结构，仅更换 User-Agent、补充 IDE/Agent/会话追踪头 | 400 / 11128 |
+| 历史请求结构，移除全部图片但保留原 system | 400 / 11128 |
+| 仅保留历史 system 和简短用户消息 | 400 / 11128 |
+| 仅调整 system 中遗留的宿主名称，其余历史内容保留 | 200，SSE 正常结束 |
+| 最终插件处理后的历史结构回放 | 200，SSE 正常结束 |
+
+因此，升级 User-Agent、换 Key、清空图片都不是这次问题的充分修复。
+这是当前实验的结论，不代表所有 `11128` 都由同一个原因触发。
+
+#### 1.3.25 的具体改动
+
+1. **出站指令身份统一。** 对 system/developer 中匹配的身份介绍句使用
+   `You are CodeBuddy, an AI coding assistant.`，并将其中的 `DeepSeek Harness`
+   名称替换为 `CodeBuddy`。支持字符串和文本块数组。
+2. **客户端头统一。** 模型推理、模型发现、登录和令牌刷新复用同一套
+   CodeBuddy 客户端头；推理请求在最终 `fetch` 边界再次处理，避免 SDK 覆盖。
+3. **清除 SDK 自动标识。** 推理出站移除 `X-Stainless-*` 头，保留认证和其他协议字段。
+4. **API Key 双认证头。** API Key 模式同时发送 `X-API-Key` 与 `Authorization: Bearer`；
+   登录令牌模式保持 Bearer，不把登录令牌复制成 API Key。
+5. **保留系统提示词和工具。** 旧 DSH 适配器可能仍提供 `Context.systemPrompt`
+   和 `Context.tools`；调用新版 pi-ai 的底层 API 前，复用其 `normalizeContext()`
+   转成消息中的系统指令和工具定义，避免请求成功却遗漏这些内容。
+
+客户端头基线来自 CodeBuddy `2.171.0`：
+
+```http
+User-Agent: CLI/2.171.0 CodeBuddy/2.171.0
+X-Product: SaaS
+X-IDE-Type: CLI
+X-IDE-Name: CodeBuddy
+X-IDE-Version: 2.171.0
+```
+
+模型配置使用 `GET https://copilot.tencent.com/v3/config`；
+推理使用 `POST https://copilot.tencent.com/v2/chat/completions` 和 `stream: true`。
+配置地址不是推理 Base URL。本次非流式试验返回 `11101`，与 `11128` 不同。
+
+#### 处理边界
+
+- 本地界面、Provider ID、凭据引用、账号与会话绑定不因身份兼容处理而改名。
+- 用户消息、助手历史、工具参数/返回值、图片和本地会话文件不改写。
+- 真实文件路径和业务文本可能体现实际运行环境；不承诺整个请求不可识别。
+- 积分查询保留 CodeBuddy 网站的 Web 协议；通用第三方 Provider 不套用这套处理。
+- 不额外复制官方 Agent/会话追踪字段，不对 `400` 进行自动重试。
+- 此兼容实现基于本次检查与测试，不是上游对第三方客户端或未来版本的兼容承诺。
+
+#### 验证结果
+
+- `npm run check`：语法检查、42 项测试及 `CLI-SELF-TEST-OK` 通过。
+- 测试覆盖出站身份、最终请求头、认证区别、原对象不变、重复处理幂等性及错误脱敏。
+- 强化适配器测试：明确断言 HTTP 请求里存在系统身份说明和工具定义。
+- 真实适配器调用：核对出站 CodeBuddy 身份、客户端头、双认证头及工具定义，
+  收到 HTTP 200、文本输出和 `finish=stop`。
+- 历史结构回放：约 5.5 MB、840 条消息、57 个工具、21 条图片消息，返回 200。
+  回放由导出事件重建，角色/图片转接、输出上限与思考档位有所调整，
+  **不是原始线上 HTTP 的逐字节录制**。
+
+上述真实验证主要覆盖中国区 `deepseek-v4.1-flash` 的 API Key 路径；
+登录/刷新与积分分支有自动化覆盖，本次没有重新进行全部账号、模型和 ModLens 的实网验收。
+
+#### 更新、生效与回退
+
+桌面 profile 更新：
+
+```powershell
+dsh plugin --profile desktop add @axiaohungry/dsh-llm-workbuddy@1.3.25
+dsh plugin --profile desktop list --depth 0
+```
+
+Web profile 将 `desktop` 换为 `web`。也可以使用本文前面的安装器。
+更新后需**完整退出并重新启动 DSH**，只刷新页面不会重载后端插件。
+账号、Key 和绑定配置可继续使用，不需要为这次修复清空历史会话。
+
+如需回退，可指定先前版本重新安装并重启，例如：
+
+```powershell
+dsh plugin --profile desktop add @axiaohungry/dsh-llm-workbuddy@1.3.23
+```
+
+回退会同时恢复该版本的旧行为，可能重新触发本次 `11128`，不会解决上游校验变化。
+
+若仍然失败，先记录 HTTP 状态、业务码、插件版本、直连或包装 Provider，
+以及错误发生在文本还是图片/工具结果之后。日志中的数字业务码可用于定位，
+不要公开 Key、Token、完整敏感请求或未经脱敏的会话导出。
+`400` 不一定是渠道问题；业务码不同时应按实际错误排查。
+
+详细调用链与实验边界见
+[CodeBuddy 调用方式与渠道兼容分析](./docs/2026-10-21-codebuddy-channel-analysis.md)。
 
 ### 调用时报 `500 status code (no body)`
 

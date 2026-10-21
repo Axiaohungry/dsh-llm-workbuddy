@@ -1,6 +1,6 @@
 {
   "name": "@axiaohungry/dsh-llm-workbuddy",
-  "version": "1.3.23",
+  "version": "1.3.25",
   "description": "通过 WorkBuddy API Key 或 WorkBuddy 登录令牌为 DeepSeek Harness 接入 WorkBuddy 模型",
   "author": "Axiaohungry",
   "keywords": [
@@ -38,6 +38,7 @@
     "cli.js",
     "cordis.patch.yml",
     "docs/反向代理调用WorkBuddy-API开发文档.md",
+    "docs/2026-10-21-codebuddy-channel-analysis.md",
     "README.md",
     "LICENSE"
   ],

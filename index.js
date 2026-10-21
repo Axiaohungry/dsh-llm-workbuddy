@@ -4,12 +4,13 @@ import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
 import { LlmError, assertUsableApiKey, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import { Config, PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 import * as dshSettings from "@deepseek-ai/dsh-settings";
-import { createProvider } from "@earendil-works/pi-ai";
+import { createProvider, normalizeContext } from "@earendil-works/pi-ai";
 import * as openAICompletionsApi from "@earendil-works/pi-ai/api/openai-completions";
 import * as openAIResponsesApi from "@earendil-works/pi-ai/api/openai-responses";
 import * as anthropicMessagesApi from "@earendil-works/pi-ai/api/anthropic-messages";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import {
+  codeBuddyHeaders,
   WORKBUDDY_SESSION_REF,
   WORKBUDDY_SESSIONS_REF,
   WORKBUDDY_SESSION_ROUTING_REF,
@@ -47,7 +48,6 @@ const API_KEY_ENV = "WORKBUDDY_API_KEY";
 const LEGACY_API_KEY_ENV = "CODEBUDDY_API_KEY";
 const BASE_URL = "https://copilot.tencent.com/v2";
 const CONFIG_URL = "https://copilot.tencent.com/v3/config";
-const USER_AGENT = "CLI/unknown CodeBuddy/2.137.1";
 const STREAM_IDLE_TIMEOUT_MS = 300_000;
 const traceContext = new AsyncLocalStorage();
 let nextTraceId = 0;
@@ -68,7 +68,9 @@ function sanitizeWorkBuddyRequest(init) {
   let body;
   try { body = JSON.parse(init.body); } catch { return init; }
   if (!Array.isArray(body?.messages)) return init;
-  const rewrite = (text) => text.replace(IDENTITY_SENTENCE_RE, "You are a helpful AI assistant.");
+  // Upstream also checks runtime branding outside the introductory identity sentence.
+  const rewrite = (text) => text.replace(IDENTITY_SENTENCE_RE, "You are CodeBuddy, an AI coding assistant.")
+    .replace(/\bDeepSeek Harness\b/gi, "CodeBuddy");
   let changed = false;
   const messages = body.messages.map((message) => {
     if (!["system", "developer"].includes(message?.role)) return message;
@@ -128,12 +130,13 @@ function workBuddyRequestOptions(options) {
   return {
     ...options,
     timeoutMs: options?.timeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
-    headers: { ...(options?.headers ?? {}), "user-agent": USER_AGENT },
+    headers: codeBuddyHeaders(options?.headers),
     fetch: async (input, init) => {
       const started = Date.now();
       traceEvent(trace, "http.start");
       try {
-        const response = await fetchImpl(input, sanitizeWorkBuddyRequest(init));
+        const prepared = sanitizeWorkBuddyRequest(init);
+        const response = await fetchImpl(input, { ...prepared, headers: codeBuddyHeaders(prepared?.headers ?? options?.headers) });
         traceEvent(trace, "http.headers", { elapsedMs: Date.now() - started, status: response.status });
         return await normalizeWorkBuddyError(response, trace);
       } catch (error) {
@@ -161,7 +164,7 @@ function traceEvent(trace, stage, details = {}) {
 function observedWorkBuddyStream(model, context, options) {
   const trace = traceContext.getStore();
   const started = Date.now();
-  const stream = openAICompletionsApi.streamSimple(model, context, workBuddyRequestOptions(options));
+  const stream = openAICompletionsApi.streamSimple(model, normalizeContext(context), workBuddyRequestOptions(options));
   return (async function* () {
     traceEvent(trace, "model.start");
     let first = true;
@@ -189,7 +192,7 @@ function observedWorkBuddyStream(model, context, options) {
 
 const workBuddyApi = {
   ...openAICompletionsApi,
-  stream: (model, context, options) => openAICompletionsApi.stream(model, context, workBuddyRequestOptions(options)),
+  stream: (model, context, options) => openAICompletionsApi.stream(model, normalizeContext(context), workBuddyRequestOptions(options)),
   streamSimple: observedWorkBuddyStream,
 };
 
@@ -297,7 +300,7 @@ function modelsFromConfig(data) {
 
 function authenticationHeaders(credential) {
   const value = assertUsableApiKey(credential.value, name, credential.ref ?? API_KEY_ENV);
-  return credential.kind === "bearer" ? { authorization: `Bearer ${value}` } : { "x-api-key": value };
+  return { authorization: `Bearer ${value}`, ...(credential.kind === "bearer" ? {} : { "x-api-key": value }) };
 }
 
 async function fetchWorkBuddyModels(credential, signal) {
@@ -307,8 +310,7 @@ async function fetchWorkBuddyModels(credential, signal) {
       headers: {
         accept: "application/json",
         ...authenticationHeaders(credential),
-        "user-agent": USER_AGENT,
-        "x-product": "SaaS",
+        ...codeBuddyHeaders(),
       },
       signal,
     });
@@ -872,6 +874,10 @@ export function apply(ctx, config) {
     traceEvent(trace, "auth.start");
     try {
       const credential = await resolveCredential(provider, profile);
+      const context = requestContext.getStore();
+      if (WORKBUDDY_PROVIDERS.has(provider) && credential.kind === "api-key" && context) {
+        context.headers["X-API-Key"] = credential.value;
+      }
       traceEvent(trace, "auth.done", { elapsedMs: Date.now() - started, mode: credential.kind });
       return credential.value;
     } catch (error) {

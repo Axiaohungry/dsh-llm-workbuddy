@@ -142,8 +142,9 @@ test("当前 DSH 适配器在无 WebUI 的调用前拉取新模型并完成 prep
       registerModelDiscovery: (_ns, value) => { discover = value; },
     },
   };
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, options) => {
     assert.equal(url, "https://copilot.tencent.com/v3/config");
+    assert.equal(new Headers(options.headers).get("x-ide-name"), "CodeBuddy");
     requestCount += 1;
     return new Response(JSON.stringify({ code: 0, data: {
       agents: [{ name: "cli", models: ["deepseek-v4.1-flash"] }],
@@ -170,6 +171,8 @@ test("当前 DSH 适配器在无 WebUI 的调用前拉取新模型并完成 prep
 
 test("桌面端 prepared stream 能发送文本并收到首个模型输出", async () => {
   const previous = globalThis.fetch;
+  let expectedSystem;
+  let expectedTools;
   let adapter;
   const ctx = {
     inject() {},
@@ -193,7 +196,13 @@ test("桌面端 prepared stream 能发送文本并收到首个模型输出", asy
     } }), { status: 200 });
     assert.match(String(url), /\/v2\/chat\/completions$/);
     assert.equal(new Headers(options.headers).get("authorization"), "Bearer test-key");
+    assert.equal(new Headers(options.headers).get("x-api-key"), "test-key");
+    assert.equal(new Headers(options.headers).get("x-ide-name"), "CodeBuddy");
     const body = JSON.parse(options.body);
+    if (expectedSystem) {
+      assert.ok(body.messages.some(message => message.role === "system" && message.content.includes("You are CodeBuddy, an AI coding assistant.")));
+    }
+    if (expectedTools) assert.equal(body.tools.length, expectedTools.length);
     for (const message of body.messages.filter((entry) => ["system", "developer"].includes(entry.role))) {
       assert.doesNotMatch(JSON.stringify(message.content), /agent powered by|assistant built on/i);
     }
@@ -213,6 +222,8 @@ test("桌面端 prepared stream 能发送文本并收到首个模型输出", asy
       { tools: [{ name: "test", description: "test", parameters: { type: "object", properties: {} } }], messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
       { system: "You are a coding agent powered by the deepseek-v4.1-flash model.", maxTokens: 128, purpose: "title", messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] },
     ]) {
+      expectedSystem = request.system;
+      expectedTools = request.tools;
       const chunks = [];
       for await (const chunk of prepared.stream({ provider: "workbuddy-cn", model: "deepseek-v4.1-flash", sessionId: "desktop-test", ...request })) chunks.push(chunk);
       assert.ok(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "你好"), JSON.stringify(chunks));
@@ -548,7 +559,7 @@ test("完整的自定义 Provider 配置由插件注册为通用路由", () => {
 });
 
 test("API Key 和登录令牌使用各自的认证头", () => {
-  assert.deepEqual(__testing.authenticationHeaders({ value: "api-key", kind: "api-key" }), { "x-api-key": "api-key" });
+  assert.deepEqual(__testing.authenticationHeaders({ value: "api-key", kind: "api-key" }), { authorization: "Bearer api-key", "x-api-key": "api-key" });
   assert.deepEqual(__testing.authenticationHeaders({ value: "login-token", kind: "bearer" }), { authorization: "Bearer login-token" });
 });
 
@@ -576,11 +587,34 @@ test("登录请求头不修改 DSH 冻结的配置对象", () => {
   assert.deepEqual(headers, { existing: "value", "X-User-Id": "user" });
 });
 
+
+test("CodeBuddy identity wins at the final HTTP boundary without changing credentials", async () => {
+  for (const original of [
+    { Authorization: "Bearer private", "User-Agent": "DeepSeek Harness", "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node", existing: "value" },
+    new Headers({ authorization: "Bearer private", "user-agent": "OpenAI/JS", "x-stainless-package-version": "test", existing: "value" }),
+  ]) {
+    const before = [...new Headers(original)];
+    let sent;
+    const options = __testing.workBuddyRequestOptions({ fetch: async (_url, init) => { sent = init; return new Response("ok"); } });
+    await options.fetch("https://copilot.tencent.com/v2/chat/completions", { headers: original });
+    const headers = new Headers(sent.headers);
+    assert.equal(headers.get("user-agent"), "CLI/2.171.0 CodeBuddy/2.171.0");
+    assert.equal(headers.get("x-product"), "SaaS");
+    assert.equal(headers.get("x-ide-type"), "CLI");
+    assert.equal(headers.get("x-ide-name"), "CodeBuddy");
+    assert.equal(headers.get("x-ide-version"), "2.171.0");
+    assert.equal(headers.get("authorization"), "Bearer private");
+    assert.equal(headers.get("x-api-key"), null);
+    assert.equal(headers.get("existing"), "value");
+    assert(![...headers.keys()].some(key => key.startsWith("x-stainless-")));
+    assert.deepEqual([...new Headers(original)], before);
+  }
+});
 test("模型请求恢复 WorkBuddy 官方 User-Agent", () => {
   const options = Object.freeze({ headers: Object.freeze({ "user-agent": "deepseek-harness", existing: "value" }) });
   const resolved = __testing.workBuddyRequestOptions(options);
 
-  assert.equal(resolved.headers["user-agent"], "CLI/unknown CodeBuddy/2.137.1");
+  assert.equal(resolved.headers["user-agent"], "CLI/2.171.0 CodeBuddy/2.171.0");
   assert.equal(resolved.headers.existing, "value");
   assert.equal(resolved.timeoutMs, 300_000);
   assert.equal(options.headers["user-agent"], "deepseek-harness");
@@ -613,17 +647,46 @@ test("WorkBuddy 出站身份句只改写系统指令，保留用户、工具和�
   assert.strictEqual(await options.fetch("https://copilot.tencent.com/v2/chat/completions", init), response);
   const actual = JSON.parse(sent.body);
   const expected = structuredClone(body);
-  expected.messages[0].content = `You are a helpful AI assistant.\n保留开发约束。 ${plain}`;
-  expected.messages[1].content[0].text = "You are a helpful AI assistant.";
-  expected.messages[1].content[1].text = "You are a helpful AI assistant.\n保留工具说明。";
+  expected.messages[0].content = `You are CodeBuddy, an AI coding assistant.\n保留开发约束。 ${plain.replaceAll("DeepSeek Harness", "CodeBuddy")}`;
+  expected.messages[1].content[0].text = "You are CodeBuddy, an AI coding assistant.";
+  expected.messages[1].content[1].text = "You are CodeBuddy, an AI coding assistant.\n保留工具说明。";
   assert.deepEqual(actual, expected);
   assert.equal(init.body, JSON.stringify(body));
-  assert.strictEqual(sent.headers, init.headers);
+  assert.equal(new Headers(sent.headers).get("authorization"), "Bearer test-key");
+  assert.deepEqual(init.headers, { authorization: "Bearer test-key" });
   const cleaned = sent;
   await options.fetch("https://copilot.tencent.com/v2/chat/completions", cleaned);
-  assert.strictEqual(sent, cleaned);
+  assert.deepEqual(sent, cleaned);
 });
 
+
+test("WorkBuddy uses CodeBuddy runtime branding only in instruction roles", async () => {
+  const branded = 'You are interacting with the user through the DeepSeek Harness Web GUI.\nThe runtime context names the DeepSeek Harness implementation checkout.';
+  const blocks = [{ type: "text", text: branded }, { type: "text", text: "保留权限、工作目录和工具规则。" }];
+  const body = { model: "deepseek-v4.1-flash", stream: true, messages: [
+    { role: "system", content: branded },
+    { role: "developer", content: blocks },
+    { role: "user", content: branded },
+    { role: "assistant", content: branded },
+    { role: "tool", tool_call_id: "test", content: branded },
+  ], tools: [{ type: "function", function: { name: "read", description: branded } }] };
+  const original = JSON.stringify(body);
+  let sent;
+  const options = __testing.workBuddyRequestOptions({ fetch: async (_url, init) => {
+    sent = init;
+    return new Response("ok");
+  } });
+  await options.fetch("https://copilot.tencent.com/v2/chat/completions", { body: original });
+  const expected = structuredClone(body);
+  expected.messages[0].content = branded.replaceAll("DeepSeek Harness", "CodeBuddy");
+  expected.messages[1].content[0].text = expected.messages[0].content;
+  assert.deepEqual(JSON.parse(sent.body), expected);
+  assert.equal(JSON.stringify(body), original);
+  assert.equal(blocks[0].text, branded);
+  const clean = sent;
+  await options.fetch("https://copilot.tencent.com/v2/chat/completions", clean);
+  assert.deepEqual(sent, clean);
+});
 test("WorkBuddy 上游业务码可见，错误正文不会泄露，成功响应保持流式", async () => {
   const original = Response.json({ code: 11128, msg: "secret-value", displayTips: { zh: "private" } }, { status: 400 });
   const options = __testing.workBuddyRequestOptions({ fetch: async () => original });
@@ -742,6 +805,8 @@ test("插件直接调用官方刷新接口且不复用旧过期时间", async ()
       account: { uid: "user", enterpriseId: "enterprise" },
     });
     assert.equal(request.url, "https://copilot.tencent.com/v2/plugin/auth/token/refresh");
+    assert.equal(new Headers(request.options.headers).get("x-ide-name"), "CodeBuddy");
+    assert.equal(new Headers(request.options.headers).get("user-agent"), "CLI/2.171.0 CodeBuddy/2.171.0");
     assert.equal(request.options.headers["X-Refresh-Token"], "refresh");
     assert.equal(request.options.headers["X-Enterprise-Id"], "enterprise");
     assert.equal(refreshed.auth.accessToken, "new-access");
