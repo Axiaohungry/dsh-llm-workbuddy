@@ -10,6 +10,7 @@ import * as openAIResponsesApi from "@earendil-works/pi-ai/api/openai-responses"
 import * as anthropicMessagesApi from "@earendil-works/pi-ai/api/anthropic-messages";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import {
+  CODEBUDDY_CLIENT_VERSION,
   codeBuddyHeaders,
   WORKBUDDY_SESSION_REF,
   WORKBUDDY_SESSIONS_REF,
@@ -63,6 +64,9 @@ const COMPAT = {
 };
 const IDENTITY_SENTENCE_RE = /\bYou are an?(?:\s+AI)?(?:\s+coding)?\s+(?:agent\s+powered by|assistant\s+built on)[^\r\n]*?(?:\.(?=\s|$)|(?=\r?\n|$))/gi;
 
+const PATH_REFERENCE_GUIDANCE = "Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root; absolute paths identify files or directories on the host. A trailing slash marks a directory: list it when its contents matter. Anything else is a file: use the read tool when its contents are needed, and do not claim to have inspected it before reading. @\"...\" quotes a path containing spaces.";
+const COMPATIBLE_PATH_REFERENCE_GUIDANCE = "Handle a user-supplied @ reference as a filesystem path. Resolve relative references against the workspace root; absolute references point to files or directories on the host. An ending slash indicates a directory: list its entries when relevant. Other references indicate files: use the read tool when content is needed, and describe file contents only after reading. Double quotes allow spaces in a referenced path, as in @\"...\".";
+
 function sanitizeWorkBuddyRequest(init) {
   if (typeof init?.body !== "string") return init;
   let body;
@@ -70,7 +74,8 @@ function sanitizeWorkBuddyRequest(init) {
   if (!Array.isArray(body?.messages)) return init;
   // Upstream also checks runtime branding outside the introductory identity sentence.
   const rewrite = (text) => text.replace(IDENTITY_SENTENCE_RE, "You are CodeBuddy, an AI coding assistant.")
-    .replace(/\bDeepSeek Harness\b/gi, "CodeBuddy");
+    .replace(/\bDeepSeek Harness\b/gi, "CodeBuddy")
+    .replaceAll(PATH_REFERENCE_GUIDANCE, COMPATIBLE_PATH_REFERENCE_GUIDANCE);
   let changed = false;
   const messages = body.messages.map((message) => {
     if (!["system", "developer"].includes(message?.role)) return message;
@@ -91,6 +96,28 @@ function sanitizeWorkBuddyRequest(init) {
   return changed ? { ...init, body: JSON.stringify({ ...body, messages }) } : init;
 }
 
+function workBuddyRequestSummary(init, headers, compatibilityRewritten) {
+  let body;
+  try { body = JSON.parse(init?.body); } catch {}
+  return {
+    clientVersion: CODEBUDDY_CLIENT_VERSION,
+    authMode: headers["x-api-key"] ? "api-key" : headers.authorization ? "bearer" : "none",
+    compatibilityRewritten,
+    bodyBytes: typeof init?.body === "string" ? Buffer.byteLength(init.body) : undefined,
+    messageCount: Array.isArray(body?.messages) ? body.messages.length : undefined,
+    toolCount: Array.isArray(body?.tools) ? body.tools.length : 0,
+  };
+}
+
+function workBuddyRateLimitResetAt(message) {
+  if (typeof message !== "string") return undefined;
+  const match = message.match(/\b(20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]) (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d) UTC\+8\b/);
+  if (!match) return undefined;
+  const utc = Date.parse(match[1].replace(" ", "T") + "+08:00");
+  if (!Number.isFinite(utc) || new Date(utc + 8 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ") !== match[1]) return undefined;
+  return `${match[1]} UTC+8`;
+}
+
 async function normalizeWorkBuddyError(response, trace) {
   if (response.ok || !response.body) return response;
   const reader = response.clone().body.getReader();
@@ -107,11 +134,18 @@ async function normalizeWorkBuddyError(response, trace) {
     const data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     const code = String(data?.code ?? data?.error?.code ?? "");
     if (!/^\d{1,9}(?:-\d{1,9})?$/.test(code)) return response;
-    const hint = code === "11128" || code === "11-128" ? "：渠道校验未通过，请检查客户端兼容性。" : "";
+    let hint = code === "11128" || code === "11-128" ? "：渠道校验未通过，请检查客户端兼容性。" : "";
+    const modelRateLimited = response.status === 429 && code === "6004";
+    if (modelRateLimited) {
+      const resetAt = workBuddyRateLimitResetAt(data?.msg ?? data?.message ?? data?.error?.message);
+      hint = "：当前模型的调用频率已达上限。" + (resetAt ? `上游预计于 ${resetAt} 重置。` : "请稍后重试。") + "也可以手动切换当前账号有权限的其他模型。";
+      if (trace) trace.modelRateLimited = true;
+    }
     const headers = new Headers(response.headers);
     headers.delete("content-length");
     headers.delete("content-encoding");
     headers.set("content-type", "application/json");
+    if (modelRateLimited) headers.set("x-should-retry", "false");
     traceEvent(trace, "http.error-code", { status: response.status, upstreamCode: code });
     // The SDK expects error.message; WorkBuddy's top-level code/msg otherwise becomes "no body".
     return new Response(JSON.stringify({ error: { code, message: `WorkBuddy 请求失败（HTTP ${response.status}，业务码 ${code}）${hint}` } }), {
@@ -136,7 +170,9 @@ function workBuddyRequestOptions(options) {
       traceEvent(trace, "http.start");
       try {
         const prepared = sanitizeWorkBuddyRequest(init);
-        const response = await fetchImpl(input, { ...prepared, headers: codeBuddyHeaders(prepared?.headers ?? options?.headers) });
+        const headers = codeBuddyHeaders(prepared?.headers ?? options?.headers);
+        traceEvent(trace, "http.request", workBuddyRequestSummary(prepared, headers, prepared?.body !== init?.body));
+        const response = await fetchImpl(input, { ...prepared, headers });
         traceEvent(trace, "http.headers", { elapsedMs: Date.now() - started, status: response.status });
         return await normalizeWorkBuddyError(response, trace);
       } catch (error) {
@@ -630,7 +666,7 @@ function installSettingsCompat(ctx, ns, schema, entry, hooks) {
   });
 }
 
-export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddySource, providerSettings, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, normalizeWorkBuddyReplay, prepareWorkBuddyOptions, selectWorkBuddyModels, sessionBindingFor });
+export const __testing = Object.freeze({ authenticationHeaders, workBuddyApiKeyAuth, workBuddyRequestOptions, workBuddyRequestSummary, workBuddySource, providerSettings, genericProvider, modelsFromConfig, ownsProvider, runtimeHeaders, stripUnsupportedReplay, normalizeWorkBuddyReplay, prepareWorkBuddyOptions, selectWorkBuddyModels, sessionBindingFor });
 
 export function apply(ctx, config) {
   const modernSettings = typeof config?.providers?.get === "function";
@@ -920,7 +956,14 @@ export function apply(ctx, config) {
     const iterator = source[Symbol.asyncIterator]();
     return {
       [Symbol.asyncIterator]() { return this; },
-      next(value) { return run(() => iterator.next(value)); },
+      async next(value) {
+        const result = await run(() => iterator.next(value));
+        const chunk = result.value;
+        if (context.modelRateLimited && chunk?.type === "finish" && chunk.reason?.kind === "error") {
+          return { ...result, value: { ...chunk, reason: { ...chunk.reason, failure: { ...chunk.reason.failure, code: "WORKBUDDY_MODEL_RATE_LIMIT" } } } };
+        }
+        return result;
+      },
       return(value) { return run(() => iterator.return?.(value) ?? Promise.resolve({ done: true, value })); },
       throw(error) { return run(() => iterator.throw?.(error) ?? Promise.reject(error)); },
     };

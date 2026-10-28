@@ -54,17 +54,18 @@ export function parseWorkBuddySessionRouting(value) {
 }
 
 const BASE_URL = "https://copilot.tencent.com/v2/plugin";
+export const CODEBUDDY_CLIENT_VERSION = "2.177.1";
 export function codeBuddyHeaders(input) {
   const headers = new Headers(input);
   for (const key of [...headers.keys()]) {
     if (key.startsWith("x-stainless-")) headers.delete(key);
   }
   for (const [key, value] of Object.entries({
-    "user-agent": "CLI/2.171.0 CodeBuddy/2.171.0",
+    "user-agent": `CLI/${CODEBUDDY_CLIENT_VERSION} CodeBuddy/${CODEBUDDY_CLIENT_VERSION}`,
     "x-product": "SaaS",
     "x-ide-type": "CLI",
     "x-ide-name": "CodeBuddy",
-    "x-ide-version": "2.171.0",
+    "x-ide-version": CODEBUDDY_CLIENT_VERSION,
   })) headers.set(key, value);
   return Object.fromEntries(headers);
 }

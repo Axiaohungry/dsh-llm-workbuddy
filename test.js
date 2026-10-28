@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import { readFileSync } from "node:fs";
 import { __testing, apply } from "./index.js";
 import {
@@ -236,6 +237,23 @@ test("桌面端 prepared stream 能发送文本并收到首个模型输出", asy
     assert.ok(failure);
     assert.match(failure.reason.failure.message, /11128/);
     assert.doesNotMatch(failure.reason.failure.message, /private-server-message/);
+    let rateRequests = 0;
+    globalThis.fetch = async () => {
+      rateRequests += 1;
+      return Response.json({ code: 6004, msg: "private-reset 2026-10-28 11:13:15 UTC+8" }, { status: 429 });
+    };
+    const limited = [];
+    for await (const chunk of prepared.stream({ provider: "workbuddy-cn", model: "deepseek-v4.1-flash", messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] })) limited.push(chunk);
+    const rateFailure = limited.find(chunk => chunk.type === "finish" && chunk.reason?.kind === "error");
+    assert.equal(rateFailure.reason.failure.code, "WORKBUDDY_MODEL_RATE_LIMIT");
+    assert(!resolveRetryPolicy(undefined, "test").retryableCodes.includes(rateFailure.reason.failure.code));
+    assert.match(rateFailure.reason.failure.message, /2026-10-28 11:13:15 UTC\+8/);
+    assert.equal(rateRequests, 1);
+    globalThis.fetch = async () => Response.json({ code: 11128 }, { status: 400 });
+    const other = [];
+    for await (const chunk of prepared.stream({ provider: "workbuddy-cn", model: "deepseek-v4.1-flash", messages: [{ role: "user", content: [{ type: "text", text: "你好" }] }] })) other.push(chunk);
+    assert.equal(other.find(chunk => chunk.type === "finish").reason.failure.code, "INVALID_REQUEST");
+
   } finally {
     globalThis.fetch = previous;
   }
@@ -598,11 +616,11 @@ test("CodeBuddy identity wins at the final HTTP boundary without changing creden
     const options = __testing.workBuddyRequestOptions({ fetch: async (_url, init) => { sent = init; return new Response("ok"); } });
     await options.fetch("https://copilot.tencent.com/v2/chat/completions", { headers: original });
     const headers = new Headers(sent.headers);
-    assert.equal(headers.get("user-agent"), "CLI/2.171.0 CodeBuddy/2.171.0");
+    assert.equal(headers.get("user-agent"), "CLI/2.177.1 CodeBuddy/2.177.1");
     assert.equal(headers.get("x-product"), "SaaS");
     assert.equal(headers.get("x-ide-type"), "CLI");
     assert.equal(headers.get("x-ide-name"), "CodeBuddy");
-    assert.equal(headers.get("x-ide-version"), "2.171.0");
+    assert.equal(headers.get("x-ide-version"), "2.177.1");
     assert.equal(headers.get("authorization"), "Bearer private");
     assert.equal(headers.get("x-api-key"), null);
     assert.equal(headers.get("existing"), "value");
@@ -614,7 +632,7 @@ test("模型请求恢复 WorkBuddy 官方 User-Agent", () => {
   const options = Object.freeze({ headers: Object.freeze({ "user-agent": "deepseek-harness", existing: "value" }) });
   const resolved = __testing.workBuddyRequestOptions(options);
 
-  assert.equal(resolved.headers["user-agent"], "CLI/2.171.0 CodeBuddy/2.171.0");
+  assert.equal(resolved.headers["user-agent"], "CLI/2.177.1 CodeBuddy/2.177.1");
   assert.equal(resolved.headers.existing, "value");
   assert.equal(resolved.timeoutMs, 300_000);
   assert.equal(options.headers["user-agent"], "deepseek-harness");
@@ -687,6 +705,46 @@ test("WorkBuddy uses CodeBuddy runtime branding only in instruction roles", asyn
   await options.fetch("https://copilot.tencent.com/v2/chat/completions", clean);
   assert.deepEqual(sent, clean);
 });
+
+test("路径说明兼容处理保留规则和真实路径，只影响系统指令", async () => {
+  const original = "Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root; absolute paths identify files or directories on the host. A trailing slash marks a directory: list it when its contents matter. Anything else is a file: use the read tool when its contents are needed, and do not claim to have inspected it before reading. @\"...\" quotes a path containing spaces.";
+  const replacement = "Handle a user-supplied @ reference as a filesystem path. Resolve relative references against the workspace root; absolute references point to files or directories on the host. An ending slash indicates a directory: list its entries when relevant. Other references indicate files: use the read tool when content is needed, and describe file contents only after reading. Double quotes allow spaces in a referenced path, as in @\"...\".";
+  const suffix = '\n权限规则保持原样；@"C:\\Data Files\\说明.md"；../../src/';
+  const body = { model: "deepseek-v4.1-flash", messages: [
+    { role: "system", content: original + suffix },
+    { role: "developer", content: [{ type: "text", text: original + suffix }, { type: "image_url", image_url: { url: "data:image/png;base64,test" } }] },
+    { role: "user", content: original },
+    { role: "assistant", content: original },
+    { role: "tool", tool_call_id: "call", content: original },
+  ], tools: [{ type: "function", function: { name: "read", description: original } }] };
+  const raw = JSON.stringify(body);
+  const init = Object.freeze({ method: "POST", body: raw });
+  let sent;
+  const options = __testing.workBuddyRequestOptions({ fetch: async (_url, value) => { sent = value; return new Response("ok"); } });
+  await options.fetch("https://copilot.tencent.com/v2/chat/completions", init);
+  const expected = structuredClone(body);
+  expected.messages[0].content = replacement + suffix;
+  expected.messages[1].content[0].text = replacement + suffix;
+  assert.deepEqual(JSON.parse(sent.body), expected);
+  assert.equal(init.body, raw);
+  const first = sent;
+  await options.fetch("https://copilot.tencent.com/v2/chat/completions", first);
+  assert.deepEqual(sent, first);
+});
+
+test("出站诊断摘要只含计数和状态，不包含凭据或消息正文", () => {
+  const body = JSON.stringify({ messages: [{ role: "system", content: "private-system" }, { role: "user", content: "private-business" }], tools: [{ name: "private-tool", description: "private-description" }] });
+  const summary = __testing.workBuddyRequestSummary({ body }, { "x-api-key": "private-key", authorization: "Bearer private-token" }, true);
+  assert.deepEqual(summary, { clientVersion: "2.177.1", authMode: "api-key", compatibilityRewritten: true, bodyBytes: Buffer.byteLength(body), messageCount: 2, toolCount: 1 });
+  assert.doesNotMatch(JSON.stringify(summary), /private-|Bearer|authorization|description/);
+  const token = __testing.workBuddyRequestSummary({ body }, { authorization: "Bearer private-token" }, false);
+  assert.equal(token.authMode, "bearer");
+  assert.equal(token.compatibilityRewritten, false);
+  const invalid = __testing.workBuddyRequestSummary({ body: "not-json" }, {}, false);
+  assert.equal(invalid.authMode, "none");
+  assert.equal(invalid.messageCount, undefined);
+  assert.equal(invalid.toolCount, 0);
+});
 test("WorkBuddy 上游业务码可见，错误正文不会泄露，成功响应保持流式", async () => {
   const original = Response.json({ code: 11128, msg: "secret-value", displayTips: { zh: "private" } }, { status: 400 });
   const options = __testing.workBuddyRequestOptions({ fetch: async () => original });
@@ -708,6 +766,28 @@ test("WorkBuddy 上游业务码可见，错误正文不会泄露，成功响应�
   assert.match(await quota.text(), /11101/);
 });
 
+
+test("6004 限流显示安全的重置时间并禁止 SDK 自动重试", async () => {
+  const options = __testing.workBuddyRequestOptions({ fetch: async () => Response.json({
+    code: 6004,
+    msg: "private-key：您的使用量已超出频率限制，将在 2026-10-28 11:13:15 UTC+8 重置，private-business",
+  }, { status: 429, headers: { "x-should-retry": "true" } }) });
+  const response = await options.fetch("https://copilot.tencent.com/v2/chat/completions", {});
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("x-should-retry"), "false");
+  const body = await response.json();
+  assert.equal(body.error.code, "6004");
+  assert.match(body.error.message, /当前模型.*频率/);
+  assert.match(body.error.message, /2026-10-28 11:13:15 UTC\+8/);
+  assert.doesNotMatch(body.error.message, /private-|渠道校验/);
+
+  for (const msg of ["private-unknown", "reset at 2026-02-31 11:13:15 UTC+8 private-secret"]) {
+    const result = await __testing.workBuddyRequestOptions({ fetch: async () => Response.json({ code: 6004, msg }, { status: 429 }) }).fetch("https://copilot.tencent.com/v2/chat/completions", {});
+    const text = await result.text();
+    assert.match(text, /稍后重试/);
+    assert.doesNotMatch(text, /private-|2026-02-31/);
+  }
+});
 test("显式空配置启用令牌模式，未配置时仍使用 API Key", () => {
   assert.equal(__testing.workBuddySource({}, {}).apiKeyEnv, "WORKBUDDY_API_KEY");
   assert.equal(__testing.workBuddySource({ providers: { "workbuddy-cn": {} } }, {}).apiKeyEnv, undefined);
@@ -806,7 +886,7 @@ test("插件直接调用官方刷新接口且不复用旧过期时间", async ()
     });
     assert.equal(request.url, "https://copilot.tencent.com/v2/plugin/auth/token/refresh");
     assert.equal(new Headers(request.options.headers).get("x-ide-name"), "CodeBuddy");
-    assert.equal(new Headers(request.options.headers).get("user-agent"), "CLI/2.171.0 CodeBuddy/2.171.0");
+    assert.equal(new Headers(request.options.headers).get("user-agent"), "CLI/2.177.1 CodeBuddy/2.177.1");
     assert.equal(request.options.headers["X-Refresh-Token"], "refresh");
     assert.equal(request.options.headers["X-Enterprise-Id"], "enterprise");
     assert.equal(refreshed.auth.accessToken, "new-access");
