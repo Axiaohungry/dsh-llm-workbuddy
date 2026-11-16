@@ -32,6 +32,7 @@ import {
   upsertWorkBuddySession,
 } from "./workbuddy-auth.js";
 import { installWorkBuddyWeb } from "./workbuddy-web.js";
+import { installWorkBuddyUsage } from "./workbuddy-usage-web.js";
 import { probeEndpoint } from "./workbuddy-discovery.js";
 
 export { Config };
@@ -672,6 +673,7 @@ export function apply(ctx, config) {
   const modernSettings = typeof config?.providers?.get === "function";
   const settingsNs = modernSettings ? ctx.fiber?.entry?.options?.id ?? name : NS;
   installWorkBuddyWeb(ctx, settingsNs);
+  installWorkBuddyUsage(ctx);
   let current = () => config;
   const requestContext = new AsyncLocalStorage();
   let remoteModels;

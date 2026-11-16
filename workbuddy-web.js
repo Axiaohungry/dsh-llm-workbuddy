@@ -43,12 +43,12 @@ export function authenticationMode(config) {
   return profile && profile.apiKeyEnv === undefined ? "token" : "api-key";
 }
 
-function json(res, status, body) {
+export function json(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(body));
 }
 
-function localPost(req) {
+export function localPost(req) {
   const address = req.socket.remoteAddress;
   const loopback = address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
   if (!loopback) return false;
@@ -63,7 +63,7 @@ function localPost(req) {
   }
 }
 
-async function requestBody(req) {
+export async function requestBody(req) {
   let raw = "";
   for await (const chunk of req) {
     raw += chunk.toString();

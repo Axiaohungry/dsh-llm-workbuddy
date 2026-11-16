@@ -97,6 +97,7 @@ window.__ModuleLoader__.load({
     function fieldLabel(text) {
       const element = document.createElement("span");
       element.textContent = text;
+      element.className = "wb-field-label";
       Object.assign(element.style, {
         flex: "0 0 auto",
         minWidth: "92px",
@@ -356,7 +357,7 @@ window.__ModuleLoader__.load({
           notifyAuthState();
         } catch (error) {
           hint.textContent = error instanceof Error ? error.message : "保存新会话凭证失败";
-          hint.style.color = "var(--dsw-text-danger, #c62828)";
+          hint.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           delete panel.dataset.busy;
           mode.disabled = false;
@@ -853,7 +854,7 @@ window.__ModuleLoader__.load({
       keyButton.style.background = !token ? "var(--dsw-accent-subtle, #eef4ff)" : "var(--dsw-surface-subtle, transparent)";
       tokenButton.style.background = token ? "var(--dsw-accent-subtle, #eef4ff)" : "var(--dsw-surface-subtle, transparent)";
       setVisible(keySection, !token);
-      setVisible(keySourceRow, apiKeys.length > 0);
+      setVisible(keySourceRow, apiKeys.length > 0, "grid");
       keySelect.replaceChildren(...apiKeys.map((key) => {
         const option = document.createElement("option");
         option.value = key.id;
@@ -871,7 +872,7 @@ window.__ModuleLoader__.load({
       setVisible(tokenSection, token);
       tokenButton.textContent = token ? "令牌模式" : "令牌登录";
       addButton.textContent = accounts.length ? "添加账号" : "登录 WorkBuddy";
-      setVisible(accountRow, token && accounts.length > 0);
+      setVisible(accountRow, token && accounts.length > 0, "grid");
       accountSelect.replaceChildren(...accounts.map((account) => {
         const option = document.createElement("option");
         option.value = account.id;
@@ -890,11 +891,11 @@ window.__ModuleLoader__.load({
       routingToggle.disabled = false;
       routingRow.title = status.routingEnabled ? "已启用：每个会话可单独选择 WorkBuddy 账号或 API Key" : "关闭时使用原有的全局账号或 API Key";
       message.textContent = token
-        ? status.authenticated ? `令牌已登录：${activeAccount ? accountText(activeAccount) : "当前账号"}` : "令牌缺失，请重新登录"
-        : status.apiKeyConfigured ? `API Key 已就绪：${activeApiKey ? apiKeyText(activeApiKey) : "当前来源"}` : "未配置 API Key，请输入后保存";
+        ? status.authenticated ? "令牌已登录，可正常使用" : "令牌缺失，请重新登录"
+        : status.apiKeyConfigured ? "API Key 已就绪，可正常使用" : "未配置 API Key，请输入后保存";
       message.style.color = token
-        ? status.authenticated ? "var(--dsw-text-success, #2e7d32)" : "var(--dsw-text-danger, #c62828)"
-        : status.apiKeyConfigured ? "var(--dsw-text-success, #2e7d32)" : "var(--dsw-text-danger, #c62828)";
+        ? status.authenticated ? "var(--dsw-text-success, light-dark(#2e7d32,#86efac))" : "var(--dsw-text-danger, light-dark(#c62828,#fda4af))"
+        : status.apiKeyConfigured ? "var(--dsw-text-success, light-dark(#2e7d32,#86efac))" : "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
     }
 
     async function request(path, body) {
@@ -949,8 +950,12 @@ window.__ModuleLoader__.load({
       const keySourceRow = row();
       const keyAddRow = row();
       const tokenSection = section();
+      keySourceRow.className = "wb-key-source";
+      keyAddRow.className = "wb-key-add";
       const accountRow = row();
+      accountRow.className = "wb-token-account";
       const tokenActionRow = row();
+      tokenActionRow.className = "wb-token-actions";
       const keyButton = button("API Key");
       const tokenButton = button("令牌登录");
       const keySelect = accountPicker();
@@ -976,6 +981,7 @@ window.__ModuleLoader__.load({
       removeKeyButton.classList.add("wb-button-danger");
       const accountSelect = accountPicker();
       const accountName = document.createElement("span");
+      accountName.className = "wb-current-account-name";
       Object.assign(accountName.style, {
         flex: "1 1 220px",
         minWidth: "0",
@@ -1051,7 +1057,7 @@ window.__ModuleLoader__.load({
       accountRow.append(accountLabel, accountSelect, accountName, removeButton);
       tokenActionRow.append(addButton);
       tokenSection.append(tokenHint, accountRow, accountStats, tokenActionRow);
-      controls.append(heading, modeRow, routingRow, keySection, tokenSection, message);
+      controls.append(heading, modeRow, keySection, tokenSection, routingRow, message);
       field.append(controls);
       let current = { mode: "api-key", authenticated: false, accounts: [], apiKeys: [], credits: undefined, segments: [], creditLoading: false, creditError: null, todayUsage: null, todayUsageError: null };
       const render = (status) => {
@@ -1112,7 +1118,7 @@ window.__ModuleLoader__.load({
           newKeyInput.focus();
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "切换失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1124,7 +1130,7 @@ window.__ModuleLoader__.load({
           render(await request("api-key", { keyId: keySelect.value }));
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "切换失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1133,7 +1139,7 @@ window.__ModuleLoader__.load({
         const value = newKeyInput.value.trim();
         if (!value) {
           message.textContent = "请输入新的 API Key";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
           newKeyInput.focus();
           return;
         }
@@ -1148,7 +1154,7 @@ window.__ModuleLoader__.load({
           render(next);
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "保存失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1167,7 +1173,7 @@ window.__ModuleLoader__.load({
           render(await request("api-key/remove", { keyId: current.activeApiKeyId }));
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "删除失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1182,7 +1188,7 @@ window.__ModuleLoader__.load({
           await loadCredits(next.activeAccountId);
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "登录失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1197,7 +1203,7 @@ window.__ModuleLoader__.load({
           await loadCredits(next.activeAccountId);
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "登录失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1211,7 +1217,7 @@ window.__ModuleLoader__.load({
           await loadCredits(next.activeAccountId);
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "切换失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1226,7 +1232,7 @@ window.__ModuleLoader__.load({
           await loadCredits(next.activeAccountId);
         } catch (error) {
           message.textContent = error instanceof Error ? error.message : "删除失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1239,7 +1245,7 @@ window.__ModuleLoader__.load({
         } catch (error) {
           routingToggle.checked = !routingToggle.checked;
           message.textContent = error instanceof Error ? error.message : "切换会话级认证失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         } finally {
           setBusy(false);
         }
@@ -1252,7 +1258,7 @@ window.__ModuleLoader__.load({
         })
         .catch(() => {
           message.textContent = "认证状态读取失败";
-          message.style.color = "var(--dsw-text-danger, #c62828)";
+          message.style.color = "var(--dsw-text-danger, light-dark(#c62828,#fda4af))";
         });
     }
 
@@ -1263,21 +1269,21 @@ window.__ModuleLoader__.load({
       style.textContent = `
 .wb-credit-mini-trigger{display:inline-grid;place-items:center;width:24px;height:24px;padding:2px;border:0;border-radius:50%;background:transparent;cursor:pointer;color:inherit;flex-shrink:0}
 .wb-credit-mini-trigger:focus-visible{outline:2px solid #818cf8;outline-offset:2px}.wb-credit-mini-ring{width:17px;height:17px;border-radius:50%;position:relative;display:block;box-shadow:0 0 7px #818cf830}.wb-credit-mini-ring:after{content:"";position:absolute;inset:4px;border-radius:50%;background:var(--dsw-surface,#fff)}
-.wb-credit-bubble{display:flex;flex-direction:column;position:fixed;z-index:2147483000;box-sizing:border-box;padding:16px;border-radius:16px;border:1px solid var(--dsw-border,#dbe2ee);background:var(--dsw-surface,#fff);color:var(--dsw-text-primary,#1e293b);box-shadow:0 18px 60px #0f172a35;overflow:auto;font:13px/1.5 system-ui;overflow-wrap:anywhere}.wb-credit-bubble[hidden]{display:none}.wb-credit-bubble>strong{font-size:15px}.wb-credit-bubble-owner{color:var(--dsw-text-secondary,#64748b);font-size:11px;margin-top:2px}
-.wb-credit-bubble-visual{flex-shrink:0;display:flex;align-items:center;gap:16px;margin:16px 0}.wb-credit-big-ring{width:112px;height:112px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;box-shadow:0 0 20px #818cf818}.wb-credit-ring-center{width:88px;height:88px;background:var(--dsw-surface,#fff);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center}.wb-credit-ring-center strong{font-size:18px;line-height:1.4;font-variant-numeric:tabular-nums}.wb-credit-ring-center small{font-size:11px;color:var(--dsw-text-secondary,#64748b)}
-.wb-credit-bubble-legend{font-size:11px;display:grid;gap:8px}.wb-credit-bubble-legend>div{display:flex;gap:6px;align-items:center}.wb-credit-bubble-legend i{width:8px;height:8px;border-radius:50%;flex-shrink:0}.wb-credit-upcoming{flex-shrink:0;padding:9px 10px;border-radius:8px;background:#f9731612;color:var(--dsw-text-warning,#9a4b15);font-size:12px;font-weight:600}
-.wb-credit-bubble-batches{min-height:0;flex-shrink:1;max-height:230px;overflow:auto;margin-top:10px;overscroll-behavior:contain}.wb-credit-bubble-batches>div{padding:9px 0;border-bottom:1px solid var(--dsw-border,#e2e8f0)}.wb-credit-bubble-batches small{display:block;color:var(--dsw-text-secondary,#64748b);font-size:11px;margin-top:3px}
+.wb-credit-bubble{display:flex;flex-direction:column;position:fixed;z-index:2147483000;box-sizing:border-box;padding:16px;border-radius:16px;border:1px solid var(--dsw-border,#dbe2ee);background:var(--dsw-surface,#fff);color:var(--dsw-text-primary,#1e293b);box-shadow:0 18px 60px #0f172a35;overflow:auto;font:13px/1.6 var(--dsw-font-family,system-ui,"Segoe UI","Microsoft YaHei",sans-serif);overflow-wrap:anywhere}.wb-credit-bubble[hidden]{display:none}.wb-credit-bubble>strong{font-size:15px}.wb-credit-bubble-owner{color:var(--dsw-text-secondary,#64748b);font-size:12px;margin-top:2px}
+.wb-credit-bubble-visual{flex-shrink:0;display:flex;align-items:center;gap:16px;margin:16px 0}.wb-credit-big-ring{width:112px;height:112px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;box-shadow:0 0 20px #818cf818}.wb-credit-ring-center{width:88px;height:88px;background:var(--dsw-surface,#fff);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center}.wb-credit-ring-center strong{font-size:18px;line-height:1.4;font-variant-numeric:tabular-nums}.wb-credit-ring-center small{font-size:12px;color:var(--dsw-text-secondary,#64748b)}
+.wb-credit-bubble-legend{font-size:12px;display:grid;gap:8px}.wb-credit-bubble-legend>div{display:flex;gap:6px;align-items:center}.wb-credit-bubble-legend i{width:8px;height:8px;border-radius:50%;flex-shrink:0}.wb-credit-upcoming{flex-shrink:0;padding:9px 10px;border-radius:8px;background:#f9731612;color:var(--dsw-text-warning,light-dark(#9a4b15,#fdba74));font-size:12px;font-weight:600}
+.wb-credit-bubble-batches{min-height:0;flex-shrink:1;max-height:230px;overflow:auto;margin-top:10px;overscroll-behavior:contain}.wb-credit-bubble-batches>div{padding:9px 0;border-bottom:1px solid var(--dsw-border,#e2e8f0)}.wb-credit-bubble-batches small{display:block;color:var(--dsw-text-secondary,#64748b);font-size:12px;margin-top:3px}
 .wb-button{border-radius:10px!important;border-color:var(--dsw-border,#dbe2ee)!important;background:var(--dsw-surface,#fff)!important;color:var(--dsw-text-primary,#334155)!important;box-shadow:0 2px 5px #18274804;transition:background-color 120ms,border-color 120ms,box-shadow 120ms!important}
 .wb-button:hover:not(:disabled){border-color:#a5b4fc!important;background:var(--dsw-accent-subtle,#eef2ff)!important;box-shadow:0 3px 10px #6366f110}.wb-button:focus-visible,.wb-field-control:focus-visible,.wb-model-editor textarea:focus-visible{outline:2px solid #818cf8;outline-offset:2px}.wb-button:disabled{opacity:.5;cursor:default!important}
-.wb-button-primary{background:linear-gradient(135deg,#394daf,#6961c9)!important;border-color:transparent!important;color:#fff!important;box-shadow:0 4px 12px #4f46e522}.wb-button-primary:hover:not(:disabled){background:linear-gradient(135deg,#32449d,#5e55bf)!important;color:#fff!important}.wb-button-danger{color:var(--dsw-text-danger,#b54454)!important;background:var(--dsw-surface,#fff)!important}.wb-button-danger:hover:not(:disabled){border-color:#f3acb8!important;background:#f43f5e0c!important}.wb-button-quiet{background:transparent!important;box-shadow:none}
+.wb-button-primary{background:linear-gradient(135deg,#394daf,#6961c9)!important;border-color:transparent!important;color:#fff!important;box-shadow:0 4px 12px #4f46e522}.wb-button-primary:hover:not(:disabled){background:linear-gradient(135deg,#32449d,#5e55bf)!important;color:#fff!important}.wb-button-danger{color:var(--dsw-text-danger,light-dark(#b54454,#fda4af))!important;background:var(--dsw-surface,#fff)!important}.wb-button-danger:hover:not(:disabled){border-color:#f3acb8!important;background:#f43f5e0c!important}.wb-button-quiet{background:transparent!important;box-shadow:none}
 .wb-field-control,.wb-model-editor textarea{border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:10px!important;background:var(--dsw-surface,#fff)!important;color:var(--dsw-text-primary,#334155)!important;max-width:100%;box-sizing:border-box}.wb-field-control::placeholder{color:var(--dsw-text-tertiary,#8793a5)}
 .wb-section{border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:14px!important;background:var(--dsw-surface-subtle,#f6f8fc)!important;padding:14px!important;gap:12px!important;min-width:0}
 .wb-settings-surface{border:0!important;padding:0!important;background:transparent!important;box-shadow:none}
 .wb-auth-controls{gap:12px!important}.wb-section-heading{display:flex;flex-direction:column;gap:3px;padding:4px 0 0}.wb-section-heading strong,.wb-model-heading{font-size:15px;color:var(--dsw-text-primary,#26354d);font-weight:650}.wb-section-heading strong:before,.wb-model-heading:before{content:"";display:inline-block;width:4px;height:13px;background:linear-gradient(#818cf8,#4f46e5);border-radius:4px;margin-right:8px;vertical-align:-1px}.wb-section-heading>span{font-size:12px;color:var(--dsw-text-secondary,#64748b)}
 .wb-mode-tabs{width:fit-content!important;max-width:100%;gap:4px!important;padding:4px;background:var(--dsw-surface-subtle,#edf0f8);border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;box-sizing:border-box}.wb-mode-tabs .wb-button{min-height:36px!important;padding:0 18px!important;background:transparent!important;border-color:transparent!important;box-shadow:none}.wb-mode-tabs .wb-button[aria-pressed="true"]{background:linear-gradient(135deg,#394daf,#6961c9)!important;color:white!important;box-shadow:0 3px 9px #4f46e526}
 .wb-routing-row{padding:10px 12px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface-subtle,#f6f8fc);box-sizing:border-box}.wb-routing-row label{font-weight:600;cursor:pointer}.wb-routing-row input{width:16px;height:16px;margin:0;accent-color:#6366f1}
-.wb-account-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important}.wb-account-stats>[data-workbuddy-stat]{display:flex;align-items:center;min-height:52px;box-sizing:border-box;padding:10px;border-radius:10px;background:var(--dsw-surface,#fff);border:1px solid var(--dsw-border,#dbe2ee);font-size:12px;line-height:1.6}.wb-account-stats>[data-workbuddy-stat="expiry"]{color:var(--dsw-text-warning,#9a4b15);background:#f9731608}.wb-account-stats>[data-workbuddy-batches]{grid-column:1/-1}.wb-auth-status{padding:7px 10px;background:var(--dsw-surface-subtle,#f6f8fc);border-radius:9px;border:1px solid var(--dsw-border,#dbe2ee)}
-.wb-model-editor{margin-top:16px}.wb-model-heading{display:block;padding:3px 0}.wb-model-card{background:var(--dsw-surface,#fff)!important;border-left:3px solid #818cf8!important}.wb-model-card-heading{font-size:11px;font-weight:650;letter-spacing:.07em;color:var(--dsw-text-secondary,#64748b)}.wb-model-fields{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end!important;gap:10px!important}.wb-model-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-field input{width:100%;min-width:0;flex:none!important}.wb-model-fields>label:not(.wb-model-field){font-size:12px;display:flex;align-items:center;gap:6px;min-height:44px}.wb-model-fields>.wb-button{justify-self:end}.wb-model-editor details{font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-editor textarea{padding:10px;min-height:72px;margin-top:8px;font:12px/1.6 monospace}.wb-model-candidates:empty{display:none}.wb-model-candidates:not(:empty){padding:12px;border:1px dashed #a5b4fc;border-radius:12px;background:var(--dsw-accent-subtle,#eef2ff)}.wb-model-candidates label{padding:5px 0;overflow-wrap:anywhere}
+.wb-account-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important}.wb-account-stats>[data-workbuddy-stat]{display:flex;align-items:center;min-height:52px;box-sizing:border-box;padding:10px;border-radius:10px;background:var(--dsw-surface,#fff);border:1px solid var(--dsw-border,#dbe2ee);font-size:12px;line-height:1.6}.wb-account-stats>[data-workbuddy-stat="expiry"]{color:var(--dsw-text-warning,light-dark(#9a4b15,#fdba74));background:#f9731608}.wb-account-stats>[data-workbuddy-batches]{grid-column:1/-1}.wb-auth-status{padding:7px 10px;background:var(--dsw-surface-subtle,#f6f8fc);border-radius:9px;border:1px solid var(--dsw-border,#dbe2ee)}
+.wb-model-editor{margin-top:16px}.wb-model-heading{display:block;padding:3px 0}.wb-model-card{background:var(--dsw-surface,#fff)!important;border-left:3px solid #818cf8!important}.wb-model-card-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:650;color:var(--dsw-text-secondary,#64748b)}.wb-model-fields{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end!important;gap:10px!important}.wb-model-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-field input{width:100%;min-width:0;flex:none!important}.wb-model-fields>label:not(.wb-model-field){font-size:12px;display:flex;align-items:center;gap:6px;min-height:44px}.wb-model-editor details{font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-editor textarea{padding:10px;min-height:72px;margin-top:8px;font:12px/1.6 monospace}.wb-model-candidates:empty{display:none}.wb-model-candidates:not(:empty){padding:12px;border:1px dashed #a5b4fc;border-radius:12px;background:var(--dsw-accent-subtle,#eef2ff)}.wb-model-candidates label{padding:5px 0;overflow-wrap:anywhere}
 .wb-pending-selector{padding:8px 10px!important;gap:8px!important;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface-subtle,#f6f8fc)}.wb-pending-selector select,[data-workbuddy-session-controls] select{border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:8px!important;background:var(--dsw-surface,#fff)!important;padding:3px 7px!important;color:var(--dsw-text-primary,#475569)!important}.wb-pending-selector select:focus-visible,[data-workbuddy-session-controls] select:focus-visible{outline:2px solid #818cf8;outline-offset:2px}[data-workbuddy-session-controls]>span:first-child{padding:2px 7px;border-radius:7px;background:#6366f110;color:var(--dsw-text-secondary,#64748b)}[data-workbuddy-session-controls] button{border-radius:7px!important;border:1px solid var(--dsw-border,#dbe2ee)!important;padding:2px 7px!important;text-decoration:none!important}
 .wb-select{appearance:none!important;-webkit-appearance:none!important;cursor:pointer;border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:10px!important;color:var(--dsw-text-primary,#334155)!important;background-color:var(--dsw-surface,#fff)!important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23818cf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")!important;background-repeat:no-repeat!important;background-position:right 10px center!important;padding:0 34px 0 12px!important;box-shadow:0 2px 5px #18274804;transition:border-color 120ms,box-shadow 120ms;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
 .wb-select:hover:not(:disabled){border-color:#a5b4fc!important;box-shadow:0 3px 10px #6366f112}.wb-select:focus-visible,.wb-select:open{outline:2px solid #818cf8;outline-offset:2px;border-color:#a5b4fc!important}.wb-select:disabled{opacity:.5;cursor:default;box-shadow:none}.wb-select-compact{min-height:28px;padding:3px 28px 3px 9px!important;border-radius:9px!important;background-position:right 7px center!important}
@@ -1293,24 +1299,101 @@ window.__ModuleLoader__.load({
 @media(prefers-reduced-motion:reduce){.wb-select,.wb-select::picker-icon{transition:none}}
 @media(max-width:500px){.wb-account-stats{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.wb-button{transition:none!important}}
+.wb-usage-panel{margin-bottom:0;color:var(--dsw-text-primary,#334155)}.wb-usage-panel>summary{font-size:15px;font-weight:650;cursor:pointer;padding:3px 0}.wb-usage-note{font-size:12px;line-height:1.7;color:var(--dsw-text-secondary,#64748b);overflow-wrap:anywhere}.wb-usage-note[data-warning="true"]{color:var(--dsw-text-warning,light-dark(#9a4b15,#fdba74))}.wb-usage-filter{flex:1 1 180px}.wb-usage-filters{align-items:flex-end!important}.wb-usage-filter select{width:100%;max-width:100%!important;min-width:0!important;flex:none!important;height:44px}.wb-usage-panel>div{margin-top:10px}.wb-usage-metrics{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))}.wb-usage-metrics .wb-usage-period{font:inherit;text-align:left;cursor:pointer;display:block;border:2px solid transparent;min-height:100px}.wb-usage-period:nth-child(4){background:linear-gradient(135deg,#58418d,#8a57aa)}.wb-usage-period[aria-pressed="true"]{border-color:#c7d2fe;box-shadow:0 0 0 2px #818cf840}.wb-usage-period:focus-visible{outline:2px solid #818cf8;outline-offset:3px}.wb-usage-panel .wb-button[aria-pressed="true"]{border-color:#818cf8!important;background:var(--dsw-accent-subtle,#eef2ff)!important}
+.wb-usage-tooltip-rows{display:grid;gap:6px;margin-top:12px}.wb-usage-tooltip-rows>div{display:flex;justify-content:space-between;gap:20px}.wb-usage-tooltip-rows span{color:var(--dsw-text-secondary,#64748b)}.wb-usage-tooltip-rows strong{font-variant-numeric:tabular-nums;text-align:right}.wb-usage-tooltip-rows>div:first-child{padding-bottom:8px;margin-bottom:2px;border-bottom:1px solid var(--dsw-border,#dbe2ee);color:var(--dsw-accent,#6366f1)}.wb-usage-column:hover .wb-usage-bar,.wb-usage-column:focus .wb-usage-bar{filter:brightness(1.12)}
+.wb-usage-chart{display:flex;align-items:flex-end;gap:5px;min-height:160px;padding:14px 8px 8px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface,#fff);overflow-x:auto;box-sizing:border-box}.wb-usage-column{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;flex:1 0 18px;min-width:18px;height:136px}.wb-usage-column:focus-visible{outline:2px solid #818cf8;border-radius:4px}.wb-usage-bar{width:100%;max-width:38px;background:linear-gradient(#a5b4fc,#6366f1);border-radius:5px 5px 1px 1px}.wb-usage-axis{font-size:11px;writing-mode:vertical-rl;margin-top:5px;height:32px;color:var(--dsw-text-secondary,#64748b)}
+.wb-usage-providers{padding:12px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface,#fff)}.wb-usage-provider-row{display:grid;grid-template-columns:minmax(70px,1fr) minmax(30px,2fr) minmax(50px,auto);align-items:center;gap:10px;margin-top:9px;font-size:12px}.wb-usage-provider-row>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wb-usage-provider-fill{height:100%;background:linear-gradient(90deg,#818cf8,#a78bfa)}.wb-usage-speed-fill{height:100%;background:linear-gradient(90deg,#14b8a6,#67e8f9)}.wb-usage-table-scroll{overflow:auto;max-height:380px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;margin-top:10px;background:var(--dsw-surface,#fff)}.wb-usage-table{width:100%;border-collapse:collapse;font-size:12px;min-width:440px}.wb-usage-table th{position:sticky;top:0;text-align:left;background:var(--dsw-surface-subtle,#f6f8fc);font-weight:600;z-index:1}.wb-usage-table th,.wb-usage-table td{padding:10px;border-bottom:1px solid var(--dsw-border,#e2e8f0);overflow-wrap:anywhere}.wb-usage-table td:last-child{min-width:125px}.wb-usage-table td .wb-credit-track{height:5px;margin-top:5px}.wb-usage-table td:nth-child(3){font-variant-numeric:tabular-nums;white-space:nowrap}
 .wb-account-panel{padding:12px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:14px;background:var(--dsw-surface-subtle,#f6f8fc);box-sizing:border-box}
-.wb-account-panel>summary{font-weight:650;cursor:pointer;padding:4px 0 10px}
+.wb-account-panel>summary{font-weight:650;cursor:pointer;padding:3px 0}
 .wb-dashboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}
 .wb-metric{border-radius:12px;padding:14px;color:#f8fafc;background:linear-gradient(135deg,#253d86,#5354be);box-shadow:0 5px 15px #313d7614;display:flex;gap:12px;align-items:center;min-width:0}
-.wb-metric:nth-child(2){background:linear-gradient(135deg,#0d596b,#157c83)}
-.wb-metric:nth-child(3){background:linear-gradient(135deg,#80502a,#aa5b37)}
-.wb-metric small{display:block;color:#e2e8f0;font-size:12px}.wb-metric strong{display:block;font-size:24px;line-height:1.3;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.wb-metric p{margin:4px 0 0;font-size:11px;color:#e2e8f0}
+.wb-metric:nth-child(2){background:linear-gradient(135deg,#3f478a,#5a61aa)}
+.wb-metric:nth-child(3){background:linear-gradient(135deg,#4f458f,#7462b5)}
+.wb-metric small{display:block;color:#e2e8f0;font-size:12px}.wb-metric strong{display:block;font-size:24px;line-height:1.3;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.wb-metric p{margin:4px 0 0;font-size:12px;color:#e2e8f0}
 .wb-progress-ring{width:54px;height:54px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;background:conic-gradient(#a5b4fc var(--wb-progress),#ffffff24 0)}
 .wb-progress-ring span{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;background:#34438e;color:white;font-weight:700;font-size:12px}
 .wb-account-card{padding:14px;margin-top:10px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface,#fff);position:relative;overflow:hidden}
 .wb-account-card:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:#818cf8}
 .wb-account-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px}.wb-account-badge{padding:3px 9px;border-radius:20px;font-size:12px;font-weight:600;background:#64748b20;color:var(--dsw-text-secondary,#475569)}
-.wb-account-badge[data-tone="success"]{background:#10b98120;color:var(--dsw-text-success,#12714d)}.wb-account-badge[data-tone="warning"]{background:#f9731620;color:var(--dsw-text-warning,#a34b0e)}
-.wb-account-balance{font-size:14px;font-weight:600;color:var(--dsw-text-primary,#1e293b);margin:5px 0}.wb-account-time{font-size:11px;color:var(--dsw-text-secondary,#667085);margin:6px 0}
+.wb-account-badge[data-tone="success"]{background:#10b98120;color:var(--dsw-text-success,light-dark(#12714d,#86efac))}.wb-account-badge[data-tone="warning"]{background:#f9731620;color:var(--dsw-text-warning,light-dark(#a34b0e,#fdba74))}
+.wb-account-balance{font-size:14px;font-weight:600;color:var(--dsw-text-primary,#1e293b);margin:5px 0}.wb-account-time{font-size:12px;color:var(--dsw-text-secondary,#667085);margin:6px 0}
 .wb-credit-chart{margin:10px 0 8px}.wb-credit-track{height:9px;display:flex;gap:2px;border-radius:8px;overflow:hidden;background:var(--dsw-border,#e2e8f0)}.wb-credit-track span{display:block;min-width:2px;border-radius:2px}
-.wb-credit-legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--dsw-text-secondary,#64748b);margin-top:7px}.wb-credit-legend span{display:inline-flex;align-items:center;gap:4px}.wb-credit-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.wb-credit-legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--dsw-text-secondary,#64748b);margin-top:7px}.wb-credit-legend span{display:inline-flex;align-items:center;gap:4px}.wb-credit-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .wb-credit-details{font-size:12px;margin:6px 0}.wb-credit-details summary{cursor:pointer;color:var(--dsw-text-secondary,#475569)}.wb-credit-details>div:not(.wb-credit-chart){padding:5px 0;border-bottom:1px solid var(--dsw-border,#e2e8f0)}
-.wb-account-panel button{min-height:34px}.wb-account-panel button:disabled{opacity:.5;cursor:default!important}.wb-account-panel summary:focus-visible{outline:2px solid #818cf8;outline-offset:3px;border-radius:4px}
+.wb-account-panel button{min-height:44px}.wb-account-panel button:disabled{opacity:.5;cursor:default!important}.wb-account-panel summary:focus-visible{outline:2px solid #818cf8;outline-offset:3px;border-radius:4px}
+
+/* Size the settings content against its dialog, independently of browser width. */
+.wb-settings-root{--wb-font-body:13px;--wb-font-note:12px;--wb-font-heading:14px;container:workbuddy / inline-size;min-width:0;width:100%;max-width:100%;font:var(--wb-font-body)/1.6 var(--dsw-font-family,system-ui,"Segoe UI","Microsoft YaHei",sans-serif);color:var(--dsw-text-primary,#334155);overflow-wrap:anywhere}
+.wb-settings-root,.wb-settings-root *{box-sizing:border-box}
+.wb-settings-root :is(button,input,select,textarea){font-family:inherit!important;font-size:var(--wb-font-body)!important;line-height:1.5}
+.wb-settings-root :is(.wb-section-heading strong,.wb-model-heading,.wb-account-panel>summary,.wb-usage-panel>summary){font-size:var(--wb-font-heading);line-height:1.6;font-weight:650}
+.wb-settings-root .wb-select{padding-right:32px!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-settings-root :is(.wb-button,.wb-field-control){min-height:44px;border-radius:10px!important}
+.wb-settings-root .wb-section{padding:12px!important;gap:10px!important;border-radius:12px!important}
+.wb-settings-root .wb-settings-surface{padding:0!important}
+.wb-settings-root .wb-auth-controls{gap:10px!important}
+.wb-settings-root .wb-field-label{min-width:0!important;font-size:var(--wb-font-note)!important;font-weight:600}
+.wb-settings-root :is(.wb-key-add,.wb-key-source,.wb-token-account){display:grid!important;align-items:center!important;gap:8px!important}
+.wb-key-add{grid-template-columns:minmax(0,1fr) minmax(0,.7fr) auto}
+.wb-settings-root :is(.wb-key-add,.wb-key-source,.wb-token-account)>.wb-field-label{grid-column:1/-1}
+.wb-key-source,.wb-token-account{grid-template-columns:minmax(0,1fr) auto}
+.wb-settings-root :is(.wb-key-add,.wb-key-source,.wb-token-account)>.wb-field-control{width:100%;min-width:0!important;max-width:100%!important;flex:none!important}
+.wb-current-account-name{grid-column:1/-1;grid-row:3;font-size:var(--wb-font-note)!important;line-height:1.6}
+.wb-token-account>.wb-button{grid-column:2;grid-row:2}
+.wb-settings-root .wb-routing-row{display:grid!important;grid-template-columns:16px minmax(0,1fr);column-gap:8px;row-gap:2px;padding:10px}
+.wb-routing-row>span{grid-column:2;font-size:var(--wb-font-note)!important}
+.wb-settings-root :is(.wb-auth-status,.wb-model-editor>[role="status"]):empty{display:none}
+.wb-settings-root .wb-account-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.wb-settings-root .wb-account-stats>[data-workbuddy-stat="expiry"]{grid-column:1/-1}
+.wb-settings-root :is(.wb-account-panel,.wb-usage-panel){padding:12px!important;border-radius:12px}
+.wb-settings-root :is(.wb-account-panel,.wb-usage-panel)>summary{padding:2px 0;outline-offset:4px}
+.wb-settings-root .wb-account-panel[open]>summary{margin-bottom:10px}
+.wb-settings-root .wb-dashboard{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+.wb-settings-root .wb-usage-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+.wb-settings-root .wb-metric{padding:12px;gap:10px;box-shadow:none;border-radius:10px}
+.wb-settings-root .wb-metric strong{font-size:22px;line-height:1.35}
+.wb-settings-root .wb-metric :is(small,p){font-size:var(--wb-font-note);line-height:1.6}
+.wb-settings-root .wb-usage-period{min-height:100px}
+.wb-settings-root .wb-usage-filters{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px!important}
+.wb-settings-root .wb-usage-toolbar{display:grid!important;grid-template-columns:auto repeat(3,minmax(0,1fr));gap:6px!important;align-items:center}
+.wb-usage-toolbar>.wb-usage-note{grid-column:1/-1}
+.wb-settings-root .wb-usage-toolbar .wb-button{padding:0 8px!important;min-width:0}
+.wb-settings-root .wb-usage-chart{min-height:158px}
+.wb-settings-root .wb-usage-table-scroll{max-height:300px}
+.wb-settings-root .wb-account-header strong{min-width:0;overflow-wrap:anywhere}
+.wb-settings-root .wb-account-badge{max-width:100%;overflow-wrap:anywhere}
+.wb-settings-root .wb-model-editor{margin-top:18px;padding-top:14px!important;border-top:1px solid var(--dsw-border,#dbe2ee)!important;background:transparent!important;border-left:0!important;border-right:0!important;border-bottom:0!important;border-radius:0!important;padding-left:0!important;padding-right:0!important}
+.wb-model-actions,.wb-model-save-row{justify-content:space-between}
+.wb-settings-root .wb-model-actions>.wb-button{flex:1 1 0;min-width:0}
+.wb-settings-root .wb-model-save-row{padding-top:10px;border-top:1px solid var(--dsw-border,#dbe2ee)}
+.wb-settings-root .wb-model-save-row>.wb-button{min-width:112px}
+.wb-settings-root .wb-model-card{border-left:1px solid var(--dsw-border,#dbe2ee)!important}
+.wb-settings-root .wb-model-fields>label:not(.wb-model-field){grid-column:1/-1;min-height:44px;font-size:var(--wb-font-body)}
+.wb-settings-root .wb-model-editor textarea{font-family:ui-monospace,Consolas,monospace!important;font-size:var(--wb-font-note)!important}
+@container workbuddy (max-width:640px){
+ .wb-settings-root .wb-usage-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .wb-settings-root .wb-usage-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .wb-usage-filters>.wb-button{grid-column:1/-1;justify-self:stretch}
+ .wb-settings-root .wb-account-panel .wb-dashboard{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .wb-account-panel .wb-dashboard>.wb-metric:first-child{grid-column:1/-1}
+}
+@container workbuddy (max-width:460px){
+ .wb-key-add{grid-template-columns:minmax(0,1fr) auto}
+ .wb-key-add>input[type="password"]{grid-column:1/-1}
+ .wb-settings-root .wb-section{padding:10px!important}
+ .wb-settings-root .wb-settings-surface{padding:0!important}
+ .wb-settings-root :is(.wb-account-panel,.wb-usage-panel){padding:10px!important}
+ .wb-settings-root .wb-usage-toolbar{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .wb-usage-toolbar>strong{grid-column:1/-1}
+ .wb-settings-root .wb-model-editor{padding-left:0!important;padding-right:0!important}
+}
+@container workbuddy (max-width:340px){
+ .wb-settings-root :is(.wb-model-fields,.wb-usage-filters,.wb-account-stats){grid-template-columns:minmax(0,1fr)}
+ .wb-settings-root .wb-metric strong{font-size:20px}
+ .wb-settings-root .wb-model-save-row>.wb-button{flex:1 1 100%;min-width:0}
+}
+@container workbuddy (min-width:680px){.wb-settings-root .wb-model-fields{grid-template-columns:repeat(4,minmax(0,1fr))}}
+
 `;
       document.head.append(style);
     }
@@ -1321,7 +1404,7 @@ window.__ModuleLoader__.load({
       summary.textContent = "全部账号 · 每日签到与积分";
       Object.assign(panel.style, { width: "100%", fontSize: "13px", lineHeight: "1.6", overflowWrap: "anywhere" });
       panel.className = "wb-account-panel";
-      panel.open = true;
+      panel.open = false;
       const dashboard = document.createElement("div");
       dashboard.className = "wb-dashboard";
       const hint = document.createElement("div");
@@ -1435,6 +1518,9 @@ window.__ModuleLoader__.load({
       heading.textContent = "模型目录";
       heading.className = "wb-model-heading";
       const actions = row();
+      actions.className = "wb-model-actions";
+      const saveActions = row();
+      saveActions.className = "wb-model-save-row";
       const fetchButton = button("获取可用模型");
       const addButton = button("添加模型");
       const resetButton = button("恢复在线目录");
@@ -1450,15 +1536,16 @@ window.__ModuleLoader__.load({
       Object.assign(host.style, { display: "flex", flexDirection: "column", gap: "10px", width: "100%" });
       Object.assign(list.style, { display: "flex", flexDirection: "column", gap: "8px" });
       Object.assign(message.style, { fontSize: "12px", minHeight: "18px" });
-      actions.append(fetchButton, addButton, resetButton, saveButton);
-      host.append(heading, actions, list, candidates, message);
+      actions.append(fetchButton, addButton);
+      saveActions.append(resetButton, saveButton);
+      host.append(heading, actions, list, candidates, saveActions, message);
       let models = null;
       let revision;
       let busy = false;
       const invalidReasoning = new Set();
       const say = (value, error = false) => {
         message.textContent = value;
-        message.style.color = error ? "var(--dsw-text-danger, #c62828)" : "var(--dsw-text-secondary, #667085)";
+        message.style.color = error ? "var(--dsw-text-danger, light-dark(#c62828,#fda4af))" : "var(--dsw-text-secondary, #667085)";
       };
       const setBusy = (value) => {
         busy = value;
@@ -1515,7 +1602,8 @@ window.__ModuleLoader__.load({
           const remove = button("删除");
           remove.classList.add("wb-button-danger");
           remove.addEventListener("click", () => { invalidReasoning.delete(model); models.splice(index, 1); render(); });
-          fields.append(imageLabel, remove);
+          modelHeading.append(remove);
+          fields.append(imageLabel);
           item.append(fields);
           if (model.reasoningEfforts !== undefined) {
             const thinking = document.createElement("details");
@@ -1627,6 +1715,8 @@ window.__ModuleLoader__.load({
         field.append(input);
         host.append(field);
         mount(input);
+        const accountPanel = field.querySelector(".wb-account-panel");
+        const disposeUsage = mountUsagePanel(accountPanel?.parentElement ?? field);
         const models = section();
         host.append(models);
         mountModelEditor(models);
@@ -1650,6 +1740,7 @@ window.__ModuleLoader__.load({
         hideNative();
         return () => {
           observer?.disconnect();
+          disposeUsage?.();
           for (const [node, previous] of hidden) {
             node.hidden = previous.hidden;
             if (previous.display) node.style.setProperty("display", previous.display, previous.priority);
@@ -1658,13 +1749,174 @@ window.__ModuleLoader__.load({
         };
       }, [provider?.provider]);
       return provider?.provider === "workbuddy-cn"
-        ? createElement("div", { ref: root, "data-workbuddy-settings-card": "" })
+        ? createElement("div", { ref: root, "data-workbuddy-settings-card": "", className: "wb-settings-root" })
         : null;
+    }
+
+    function compactTokens(value) {
+      const n = Number(value) || 0;
+      return n >= 1e8 ? (n / 1e8).toFixed(2) + " 亿" : n >= 1e4 ? (n / 1e4).toFixed(2) + " 万" : formatCredits(n);
+    }
+
+    function mountUsageTooltip() {
+      const bubble = document.createElement("div");
+      bubble.className = "wb-credit-bubble wb-usage-tooltip";
+      bubble.id = "wb-usage-tooltip-" + Math.random().toString(36).slice(2);
+      bubble.setAttribute("role", "tooltip");bubble.hidden = true;document.body.append(bubble);
+      let anchor, timer;
+      function hide() {
+        window.clearTimeout(timer);bubble.hidden = true;
+        anchor?.removeAttribute("aria-describedby");anchor = undefined;
+      }
+      function later() { window.clearTimeout(timer);timer = window.setTimeout(hide, 160); }
+      function show(column, point, caption) {
+        hide();anchor = column;
+        const heading = document.createElement("strong"), scope = document.createElement("small"), rows = document.createElement("div");
+        heading.textContent = point.bucket + " · " + caption;
+        scope.className = "wb-credit-bubble-owner";scope.textContent = "当前服务商 / 模型筛选范围内 · 北京时间";
+        rows.className = "wb-usage-tooltip-rows";
+        const values = [["Token 总量",formatCredits(point.totalTokens)],["未缓存输入",formatCredits(point.inputTokens)],["输出",formatCredits(point.outputTokens)],["缓存读取",formatCredits(point.cacheReadTokens)],["缓存写入",formatCredits(point.cacheWriteTokens)],["请求次数",formatCredits(point.calls)],["生成速度",point.speed === null ? "暂无有效计时" : formatCredits(point.speed) + " Token/s"],["有效速度样本",formatCredits(point.speedSamples)]];
+        if(point.missingUsage)values.push(["缺少用量的响应",formatCredits(point.missingUsage)]);
+        for(const [name,value] of values){const line=document.createElement("div"),label=document.createElement("span"),amount=document.createElement("strong");label.textContent=name;amount.textContent=value;line.append(label,amount);rows.append(line)}
+        bubble.replaceChildren(heading,scope,rows);bubble.hidden = false;
+        column.setAttribute("aria-describedby",bubble.id);
+        bubble.style.width = Math.min(300,window.innerWidth-24)+"px";
+        bubble.style.maxHeight = Math.max(100,window.innerHeight-24)+"px";
+        const rect=column.getBoundingClientRect(),size=bubble.getBoundingClientRect();
+        bubble.style.left=Math.max(12,Math.min(rect.left+rect.width/2-size.width/2,window.innerWidth-size.width-12))+"px";
+        bubble.style.top=Math.max(12,Math.min(rect.top-size.height-10>=12?rect.top-size.height-10:rect.bottom+10,window.innerHeight-size.height-12))+"px";
+      }
+      const escape = (event) => { if(event.key === "Escape")hide(); };
+      const scroll = (event) => { if(!bubble.contains(event.target))hide(); };
+      bubble.addEventListener("mouseenter",()=>window.clearTimeout(timer));bubble.addEventListener("mouseleave",later);
+      window.addEventListener("keydown",escape);window.addEventListener("resize",hide);window.addEventListener("scroll",scroll,true);
+      return {show,hide,later,dispose(){hide();bubble.remove();window.removeEventListener("keydown",escape);window.removeEventListener("resize",hide);window.removeEventListener("scroll",scroll,true)}};
+    }
+
+    function mountUsagePanel(host) {
+      installAccountVisualStyles();
+      const panel = document.createElement("details"), summary = document.createElement("summary"), intro = document.createElement("div"), filters = row(), metrics = document.createElement("div"), toolbar = row(), status = document.createElement("div"), chart = document.createElement("div"), providers = document.createElement("div"), models = document.createElement("div");
+      const tooltip = mountUsageTooltip();
+      panel.className = "wb-usage-panel wb-section";
+      panel.open = false;
+      summary.textContent = "用量统计 · 全部 DSH";
+      intro.className = status.className = "wb-usage-note";
+      intro.textContent = "按北京时间统计整个 DSH 的历史用量；仅使用日志已报告的计量数据，包含缓存 Token。";
+      status.setAttribute("role", "status");status.setAttribute("aria-live", "polite");
+      metrics.className = "wb-dashboard wb-usage-metrics";
+      const provider = accountPicker(), model = accountPicker(), refresh = button("刷新统计");
+      refresh.classList.add("wb-button-primary");
+      provider.setAttribute("aria-label", "统计服务商");model.setAttribute("aria-label", "统计模型");
+      for (const [title, input] of [["服务商", provider], ["模型", model]]) {
+        const label = document.createElement("label"), text = document.createElement("span");
+        label.className = "wb-model-field wb-usage-filter";text.textContent = title;label.append(text,input);filters.append(label);
+      }
+      filters.className = "wb-usage-filters";
+      filters.append(refresh);
+      let query = { provider: "", model: "", period: "all", granularity: "day" }, requestId = 0, disposed = false, lastSignature = "";
+      const periodNames = { today: "今日", week: "本周", month: "本月", all: "累计" };
+      const periodButtons = new Map(), tabs = new Map();
+      for (const [key, label] of Object.entries(periodNames)) {
+        const tile = document.createElement("button"), title = document.createElement("small"), value = document.createElement("strong"), detail = document.createElement("p");
+        tile.type = "button";tile.className = "wb-metric wb-usage-period";title.textContent = label + " Token";value.textContent = "—";detail.textContent = "等待读取";tile.append(title,value,detail);metrics.append(tile);
+        tile.addEventListener("click", () => { query.period = key; load(); });
+        periodButtons.set(key, { tile, value, detail });
+      }
+      const trendTitle = document.createElement("strong"), rangeNote = document.createElement("span");
+      trendTitle.textContent = "Token 趋势";rangeNote.className = "wb-usage-note";
+      toolbar.className = "wb-usage-toolbar";
+      toolbar.append(trendTitle);
+      for (const [key,label] of [["day","按日"],["week","按周"],["month","按月"]]) {
+        const tab = button(label);tab.addEventListener("click",()=>{query.granularity=key;load()});tabs.set(key,tab);toolbar.append(tab);
+      }
+      toolbar.append(rangeNote);
+      panel.append(summary,intro,filters,metrics,status,toolbar,chart,providers,models);host.append(panel);
+      function options(select, values, first, selected) {
+        const choices = [["", first], ...values.map((v) => [v, v === "unknown" ? "未知（日志未记录）" : v])];
+        const signature = JSON.stringify(choices);
+        if (select.dataset.options !== signature) {
+          select.replaceChildren(...choices.map(([value,label]) => { const option=document.createElement("option");option.value=value;option.textContent=label;return option; }));
+          select.dataset.options = signature;
+        }
+        if (select.value !== selected) select.value = selected;
+      }
+      function render(data) {
+        options(provider,data.filters.providers,"全部服务商",query.provider);options(model,data.filters.models,"全部模型",query.model);
+        summary.textContent = query.provider || query.model ? "用量统计 · 整个 DSH · 已按条件筛选" : "用量统计 · " + data.filters.providers.length + " 个服务商 / " + data.filters.models.length + " 个模型";
+        for (const [key, item] of periodButtons) {
+          const totals = data.summary[key];
+          item.value.textContent = compactTokens(totals.totalTokens);item.value.title = formatCredits(totals.totalTokens) + " Token";
+          item.tile.setAttribute("aria-pressed",String(query.period===key));
+          item.detail.textContent = "输入 " + compactTokens(totals.inputTokens) + " · 输出 " + compactTokens(totals.outputTokens) + " · 缓存 " + compactTokens(totals.cacheReadTokens+totals.cacheWriteTokens);
+        }
+        for(const [key,tab] of tabs)tab.setAttribute("aria-pressed",String(query.granularity===key));
+        const scan=data.scan, all=data.summary.all;
+        const warnings=[scan.supportsZstd===false?"当前 DSH 运行时不能读取压缩日志，请升级 DSH":"",scan.failedFiles?scan.failedFiles+" 份日志读取失败（保留上次有效数据）":"",scan.incompleteFiles?scan.incompleteFiles+" 份日志尾部未完成（稍后自动重读）":"",scan.badLines?scan.badLines+" 行损坏数据已跳过":"",scan.readError?"部分日志目录无法读取，统计可能不完整":"",scan.cacheError?"统计缓存暂不可用，重启后将重新扫描":"",all.missingUsage?all.missingUsage+" 次响应缺少用量，未计入 Token":""].filter(Boolean);
+        status.textContent=(scan.scanning?"正在扫描 "+scan.done+" / "+scan.totalFiles+" 份日志；当前为阶段结果。":"已扫描 "+scan.totalFiles+" 份日志；"+(scan.lastScanAt?"更新于 "+expiryDate(scan.lastScanAt):"等待首次扫描"))+ (warnings.length?" · "+warnings.join("；"):"");
+        status.dataset.warning=String(warnings.length>0);
+        refresh.disabled=scan.scanning;refresh.textContent=scan.scanning?"扫描中…":"刷新统计";
+        rangeNote.textContent=periodNames[query.period]+"范围 · 最多显示最近 30 个"+({day:"日",week:"周",month:"月"}[query.granularity])+"周期";
+        tooltip.hide();chart.replaceChildren();chart.className="wb-usage-chart";
+        const max=Math.max(1,...data.trend.map(p=>p.totalTokens));
+        if(!all.calls&&!scan.scanning)chart.append("尚未找到可统计的会话记录。");
+        else for(const point of data.trend){
+          const column=document.createElement("div"), bar=document.createElement("div"), label=document.createElement("span");
+          column.className="wb-usage-column";bar.className="wb-usage-bar";label.className="wb-usage-axis";
+          bar.style.height=(point.totalTokens/max*112)+"px";bar.style.minHeight=point.totalTokens?"3px":"0";
+          label.textContent=query.granularity==="month"?point.bucket.slice(2):point.bucket.slice(5);
+          const description=point.bucket+" · "+formatCredits(point.totalTokens)+" Token";
+          column.setAttribute("role","img");column.setAttribute("aria-label",description);column.tabIndex=0;
+          const open=()=>tooltip.show(column,point,({day:"按日",week:"周一开始的周",month:"按月"}[query.granularity]));
+          column.addEventListener("mouseenter",open);column.addEventListener("mouseleave",tooltip.later);
+          column.addEventListener("focus",open);column.addEventListener("blur",tooltip.later);column.addEventListener("click",open);
+          column.append(bar,label);chart.append(column);
+        }
+        providers.replaceChildren();providers.className="wb-usage-providers";
+        const providerTitle=document.createElement("strong");providerTitle.textContent=periodNames[query.period]+"服务商用量";providers.append(providerTitle);
+        const providerMax=Math.max(1,...data.providers.map(p=>p.totalTokens));
+        if(!data.providers.length)providers.append("当前范围暂无数据");
+        for(const row of data.providers){
+          const line=document.createElement("div"), name=document.createElement("span"), track=document.createElement("div"), fill=document.createElement("div"), value=document.createElement("span");
+          line.className="wb-usage-provider-row";track.className="wb-credit-track";fill.className="wb-usage-provider-fill";
+          name.textContent=row.provider==="unknown"?"未知服务商":row.provider;name.title=name.textContent;
+          value.textContent=compactTokens(row.totalTokens);value.title=formatCredits(row.totalTokens)+" Token";fill.style.width=(row.totalTokens/providerMax*100)+"%";track.append(fill);line.append(name,track,value);providers.append(line);
+        }
+        models.replaceChildren();
+        const title=document.createElement("strong"), note=document.createElement("div"), viewport=document.createElement("div"), table=document.createElement("table"), thead=document.createElement("thead"), header=document.createElement("tr"), tbody=document.createElement("tbody");
+        title.textContent=periodNames[query.period]+"模型用量与速度";
+        note.className="wb-usage-note";note.textContent="生成速度 = 有效样本输出 Token 总量 ÷ 流式耗时总和，包含思考及工具参数；计时不足或用量缺失时不估算。";
+        viewport.className="wb-usage-table-scroll";table.className="wb-usage-table";
+        for(const name of ["服务商","模型","Token","生成速度"]){const th=document.createElement("th");th.textContent=name;th.scope="col";header.append(th)}thead.append(header);
+        const maxSpeed=Math.max(1,...data.models.map(m=>m.speed??0));
+        for(const row of data.models){
+          const tr=document.createElement("tr");
+          for(const value of [row.provider==="unknown"?"未知服务商":row.provider,row.model==="unknown"?"未知模型":row.model,formatCredits(row.totalTokens)]){const td=document.createElement("td");td.textContent=value;tr.append(td)}
+          const speed=document.createElement("td"), label=document.createElement("span"), track=document.createElement("div"), fill=document.createElement("div");
+          label.textContent=row.speed===null?"暂无有效计时":formatCredits(row.speed)+" Token/s";
+          speed.title="有效速度样本 "+row.speedSamples+" 次；缺少用量 "+row.missingUsage+" 次";track.className="wb-credit-track";fill.className="wb-usage-speed-fill";fill.style.width=((row.speed??0)/maxSpeed*100)+"%";track.append(fill);speed.append(label,track);tr.append(speed);tbody.append(tr);
+        }
+        if(!data.models.length){const tr=document.createElement("tr"),td=document.createElement("td");td.colSpan=4;td.textContent="当前范围暂无模型记录";tr.append(td);tbody.append(tr)}
+        table.append(thead,tbody);viewport.append(table);models.append(title,note,viewport);
+      }
+      async function load(action) {
+        const id=++requestId;
+        if(action==="refresh"){lastSignature="";refresh.disabled=true;status.textContent="正在刷新统计…"}
+        try {
+          const response=await fetch("/dsh-llm-workbuddy/usage",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({...query,...(action?{action}:{})}),cache:"no-store"});
+          const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||"读取统计失败");
+          if(disposed||id!==requestId)return;
+          const signature=JSON.stringify(data);if(signature===lastSignature)return;lastSignature=signature;render(data);
+        }catch(error){if(!disposed&&id===requestId){status.textContent=error.message||"读取用量统计失败，请重试";status.dataset.warning="true";refresh.disabled=false;refresh.textContent="刷新统计"}}
+      }
+      provider.addEventListener("change",()=>{query.provider=provider.value;query.model="";load()});model.addEventListener("change",()=>{query.model=model.value;load()});
+      refresh.addEventListener("click",()=>load("refresh"));panel.addEventListener("toggle",()=>{tooltip.hide();if(panel.open)load()});
+      const timer=window.setInterval(()=>{if(panel.isConnected&&panel.open)load()},5000);load();
+      return ()=>{disposed=true;++requestId;window.clearInterval(timer);tooltip.dispose();panel.remove()};
     }
 
     function WorkBuddyPluginDetails({ subject }) {
       return subject?.kind === "bundle" && subject.pkg?.name === "@axiaohungry/dsh-llm-workbuddy"
-        ? createElement(WorkBuddySettingsCard, { provider: { provider: "workbuddy-cn" }, embedded: true })
+        ? createElement("div", null, createElement(WorkBuddySettingsCard, { provider: { provider: "workbuddy-cn" }, embedded: true }))
         : null;
     }
 
