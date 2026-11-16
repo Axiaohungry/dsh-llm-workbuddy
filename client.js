@@ -53,7 +53,7 @@ window.__ModuleLoader__.load({
     function accountPicker() {
       const element = document.createElement("select");
       element.setAttribute("aria-label", "WorkBuddy 令牌账号");
-      element.className = "wb-field-control";
+      element.className = "wb-field-control wb-select";
       Object.assign(element.style, {
         minHeight: "44px",
         minWidth: "180px",
@@ -316,8 +316,10 @@ window.__ModuleLoader__.load({
       label.textContent = "新会话默认凭证";
       const mode = document.createElement("select");
       mode.setAttribute("aria-label", "新会话认证模式");
+      mode.className = "wb-select wb-select-compact";
       const credential = document.createElement("select");
       credential.setAttribute("aria-label", "新会话 WorkBuddy 凭证");
+      credential.className = "wb-select wb-select-compact";
       for (const element of [mode, credential]) Object.assign(element.style, {
         boxSizing: "border-box",
         minWidth: "0",
@@ -701,11 +703,11 @@ window.__ModuleLoader__.load({
         "span",
         { "data-workbuddy-session-controls": true, style: { display: "inline-flex", alignItems: "center", justifyContent: "flex-end", flex: "1 1 100%", flexWrap: "wrap", gap: "4px", minWidth: 0, maxWidth: "100%" } },
         createElement("span", { title: state.sessionBinding ? "当前会话已使用独立凭证" : "当前会话未绑定，下次发送将固化当前默认凭证" }, state.sessionBinding ? "已绑定" : "未绑定"),
-        createElement("select", { value: state.mode, onChange: onSessionModeChange, "aria-label": "当前会话认证模式", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "110px" } },
+        createElement("select", { className: "wb-select wb-select-compact", value: state.mode, onChange: onSessionModeChange, "aria-label": "当前会话认证模式", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "110px" } },
           createElement("option", { value: "token" }, "令牌"),
           createElement("option", { value: "api-key" }, "API Key"),
         ),
-        createElement("select", { value: state.mode === "token" ? state.activeAccountId ?? "" : state.activeApiKeyId ?? "", onChange: onSessionCredentialChange, "aria-label": "当前会话凭证", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "190px" } }, credentialOptions),
+        createElement("select", { className: "wb-select wb-select-compact", value: state.mode === "token" ? state.activeAccountId ?? "" : state.activeApiKeyId ?? "", onChange: onSessionCredentialChange, "aria-label": "当前会话凭证", style: { border: "0", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px", minWidth: 0, maxWidth: "190px" } }, credentialOptions),
         state.sessionBinding ? createElement("button", { type: "button", onClick: onUnbind, title: "解除当前绑定，下次发送时重新绑定默认凭证", style: actionStyle }, "解除绑定") : null,
         createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 2px" } }, "·"),
       ) : null;
@@ -1277,6 +1279,18 @@ window.__ModuleLoader__.load({
 .wb-account-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important}.wb-account-stats>[data-workbuddy-stat]{display:flex;align-items:center;min-height:52px;box-sizing:border-box;padding:10px;border-radius:10px;background:var(--dsw-surface,#fff);border:1px solid var(--dsw-border,#dbe2ee);font-size:12px;line-height:1.6}.wb-account-stats>[data-workbuddy-stat="expiry"]{color:var(--dsw-text-warning,#9a4b15);background:#f9731608}.wb-account-stats>[data-workbuddy-batches]{grid-column:1/-1}.wb-auth-status{padding:7px 10px;background:var(--dsw-surface-subtle,#f6f8fc);border-radius:9px;border:1px solid var(--dsw-border,#dbe2ee)}
 .wb-model-editor{margin-top:16px}.wb-model-heading{display:block;padding:3px 0}.wb-model-card{background:var(--dsw-surface,#fff)!important;border-left:3px solid #818cf8!important}.wb-model-card-heading{font-size:11px;font-weight:650;letter-spacing:.07em;color:var(--dsw-text-secondary,#64748b)}.wb-model-fields{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end!important;gap:10px!important}.wb-model-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-field input{width:100%;min-width:0;flex:none!important}.wb-model-fields>label:not(.wb-model-field){font-size:12px;display:flex;align-items:center;gap:6px;min-height:44px}.wb-model-fields>.wb-button{justify-self:end}.wb-model-editor details{font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-editor textarea{padding:10px;min-height:72px;margin-top:8px;font:12px/1.6 monospace}.wb-model-candidates:empty{display:none}.wb-model-candidates:not(:empty){padding:12px;border:1px dashed #a5b4fc;border-radius:12px;background:var(--dsw-accent-subtle,#eef2ff)}.wb-model-candidates label{padding:5px 0;overflow-wrap:anywhere}
 .wb-pending-selector{padding:8px 10px!important;gap:8px!important;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface-subtle,#f6f8fc)}.wb-pending-selector select,[data-workbuddy-session-controls] select{border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:8px!important;background:var(--dsw-surface,#fff)!important;padding:3px 7px!important;color:var(--dsw-text-primary,#475569)!important}.wb-pending-selector select:focus-visible,[data-workbuddy-session-controls] select:focus-visible{outline:2px solid #818cf8;outline-offset:2px}[data-workbuddy-session-controls]>span:first-child{padding:2px 7px;border-radius:7px;background:#6366f110;color:var(--dsw-text-secondary,#64748b)}[data-workbuddy-session-controls] button{border-radius:7px!important;border:1px solid var(--dsw-border,#dbe2ee)!important;padding:2px 7px!important;text-decoration:none!important}
+.wb-select{appearance:none!important;-webkit-appearance:none!important;cursor:pointer;border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:10px!important;color:var(--dsw-text-primary,#334155)!important;background-color:var(--dsw-surface,#fff)!important;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23818cf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")!important;background-repeat:no-repeat!important;background-position:right 10px center!important;padding:0 34px 0 12px!important;box-shadow:0 2px 5px #18274804;transition:border-color 120ms,box-shadow 120ms;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+.wb-select:hover:not(:disabled){border-color:#a5b4fc!important;box-shadow:0 3px 10px #6366f112}.wb-select:focus-visible,.wb-select:open{outline:2px solid #818cf8;outline-offset:2px;border-color:#a5b4fc!important}.wb-select:disabled{opacity:.5;cursor:default;box-shadow:none}.wb-select-compact{min-height:28px;padding:3px 28px 3px 9px!important;border-radius:9px!important;background-position:right 7px center!important}
+@supports(appearance:base-select){
+.wb-select,.wb-select::picker(select){appearance:base-select!important;-webkit-appearance:base-select!important}
+.wb-select{background-image:none!important;display:inline-flex;align-items:center;gap:9px;padding-right:12px!important}.wb-select-compact{padding-right:9px!important}
+.wb-select::picker-icon{content:"";width:7px;height:7px;border-right:2px solid #818cf8;border-bottom:2px solid #818cf8;transform:rotate(45deg);margin:0 2px 4px auto;flex-shrink:0;transition:transform 120ms}
+.wb-select:open::picker-icon{transform:rotate(225deg);margin-bottom:0}
+.wb-select::picker(select){box-sizing:border-box;min-width:anchor-size(width);max-width:min(420px,calc(100vw - 24px));max-height:280px;padding:6px;margin-block:7px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:13px;background:var(--dsw-surface,#fff);color:var(--dsw-text-primary,#334155);box-shadow:0 14px 40px #1e293b25;overflow:auto;font:13px/1.5 system-ui}
+.wb-select option{display:flex;align-items:center;gap:10px;min-height:36px;padding:8px 10px;box-sizing:border-box;border:0;border-radius:8px;white-space:normal;overflow-wrap:anywhere;cursor:pointer;color:var(--dsw-text-primary,#334155);background:transparent}
+.wb-select option:checked{background:linear-gradient(120deg,#6366f118,#8b5cf610);color:var(--dsw-text-primary,#383b86);font-weight:600}.wb-select option:hover:not(:disabled),.wb-select option:focus-visible{background:var(--dsw-accent-subtle,#eef2ff);outline:none}.wb-select option:disabled{opacity:.45;cursor:default}.wb-select option::checkmark{order:1;margin-left:auto;color:#818cf8;font-weight:700}
+}
+@media(prefers-reduced-motion:reduce){.wb-select,.wb-select::picker-icon{transition:none}}
 @media(max-width:500px){.wb-account-stats{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.wb-button{transition:none!important}}
 .wb-account-panel{padding:12px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:14px;background:var(--dsw-surface-subtle,#f6f8fc);box-sizing:border-box}

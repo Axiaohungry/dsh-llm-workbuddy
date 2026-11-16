@@ -37,6 +37,12 @@
 
 ![积分圆环与到期明细](https://raw.githubusercontent.com/Axiaohungry/dsh-llm-workbuddy/main/docs/images/credit-ring-1.4.0.jpg)
 
+### 下拉框与选项列表
+
+设置页和会话中的下拉框使用统一的箭头、聚焦状态和选项菜单；支持方向键选择、Enter 确认、Esc 关闭。较旧浏览器会保留系统选项菜单。
+
+![下拉框与选项列表](https://raw.githubusercontent.com/Axiaohungry/dsh-llm-workbuddy/main/docs/images/select-menu-1.4.1.jpg)
+
 ## 环境要求
 
 - 已安装 DSH，支持已声明兼容的旧版和 `0.2.x` 系列。
@@ -135,6 +141,12 @@ API Key 模式不显示账号令牌积分。
 - 企业账号不支持签到时会显示原因，仍可查看余额；API Key 不支持账号签到。
 - 输入区“剩余积分”右侧提供小圆环：悬停、键盘聚焦或点击可查看大圆环和各批次到期明细；支持滚动、Esc 关闭。
 - 到期时间以服务端数据为准，未知时间明确标注；“今日已签到”不会推算本次奖励数量。
+
+## 1.4.1 更新
+
+- 统一账号、API Key、新会话和已绑定会话的下拉框样式。
+- 优化展开列表的圆角、阴影、选中提示、禁用项与键盘交互。
+- 保留已有凭据选择和会话绑定逻辑。
 
 ## 1.4.0 更新
 
