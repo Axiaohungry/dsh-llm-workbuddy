@@ -54,7 +54,7 @@ export function parseWorkBuddySessionRouting(value) {
 }
 
 const BASE_URL = "https://copilot.tencent.com/v2/plugin";
-export const CODEBUDDY_CLIENT_VERSION = "2.177.1";
+export const CODEBUDDY_CLIENT_VERSION = "2.184.0";
 export function codeBuddyHeaders(input) {
   const headers = new Headers(input);
   for (const key of [...headers.keys()]) {
@@ -67,6 +67,8 @@ export function codeBuddyHeaders(input) {
     "x-ide-name": "CodeBuddy",
     "x-ide-version": CODEBUDDY_CLIENT_VERSION,
   })) headers.set(key, value);
+  const userId = headers.get("x-user-id");
+  if (userId) headers.set("x-wb-uid", userId);
   return Object.fromEntries(headers);
 }
 const REQUEST_HEADERS = {

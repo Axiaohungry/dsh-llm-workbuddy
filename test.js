@@ -608,7 +608,7 @@ test("登录请求头不修改 DSH 冻结的配置对象", () => {
 
 test("CodeBuddy identity wins at the final HTTP boundary without changing credentials", async () => {
   for (const original of [
-    { Authorization: "Bearer private", "User-Agent": "DeepSeek Harness", "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node", existing: "value" },
+    { Authorization: "Bearer private", "User-Agent": "DeepSeek Harness", "X-Stainless-Lang": "js", "X-Stainless-Runtime": "node", "X-User-Id": "account-uid", existing: "value" },
     new Headers({ authorization: "Bearer private", "user-agent": "OpenAI/JS", "x-stainless-package-version": "test", existing: "value" }),
   ]) {
     const before = [...new Headers(original)];
@@ -616,14 +616,15 @@ test("CodeBuddy identity wins at the final HTTP boundary without changing creden
     const options = __testing.workBuddyRequestOptions({ fetch: async (_url, init) => { sent = init; return new Response("ok"); } });
     await options.fetch("https://copilot.tencent.com/v2/chat/completions", { headers: original });
     const headers = new Headers(sent.headers);
-    assert.equal(headers.get("user-agent"), "CLI/2.177.1 CodeBuddy/2.177.1");
+    assert.equal(headers.get("user-agent"), "CLI/2.184.0 CodeBuddy/2.184.0");
     assert.equal(headers.get("x-product"), "SaaS");
     assert.equal(headers.get("x-ide-type"), "CLI");
     assert.equal(headers.get("x-ide-name"), "CodeBuddy");
-    assert.equal(headers.get("x-ide-version"), "2.177.1");
+    assert.equal(headers.get("x-ide-version"), "2.184.0");
     assert.equal(headers.get("authorization"), "Bearer private");
     assert.equal(headers.get("x-api-key"), null);
     assert.equal(headers.get("existing"), "value");
+    if (new Headers(original).has("x-user-id")) assert.equal(headers.get("x-wb-uid"), "account-uid");
     assert(![...headers.keys()].some(key => key.startsWith("x-stainless-")));
     assert.deepEqual([...new Headers(original)], before);
   }
@@ -632,7 +633,7 @@ test("模型请求恢复 WorkBuddy 官方 User-Agent", () => {
   const options = Object.freeze({ headers: Object.freeze({ "user-agent": "deepseek-harness", existing: "value" }) });
   const resolved = __testing.workBuddyRequestOptions(options);
 
-  assert.equal(resolved.headers["user-agent"], "CLI/2.177.1 CodeBuddy/2.177.1");
+  assert.equal(resolved.headers["user-agent"], "CLI/2.184.0 CodeBuddy/2.184.0");
   assert.equal(resolved.headers.existing, "value");
   assert.equal(resolved.timeoutMs, 300_000);
   assert.equal(options.headers["user-agent"], "deepseek-harness");
@@ -735,7 +736,7 @@ test("路径说明兼容处理保留规则和真实路径，只影响系统指�
 test("出站诊断摘要只含计数和状态，不包含凭据或消息正文", () => {
   const body = JSON.stringify({ messages: [{ role: "system", content: "private-system" }, { role: "user", content: "private-business" }], tools: [{ name: "private-tool", description: "private-description" }] });
   const summary = __testing.workBuddyRequestSummary({ body }, { "x-api-key": "private-key", authorization: "Bearer private-token" }, true);
-  assert.deepEqual(summary, { clientVersion: "2.177.1", authMode: "api-key", compatibilityRewritten: true, bodyBytes: Buffer.byteLength(body), messageCount: 2, toolCount: 1 });
+  assert.deepEqual(summary, { clientVersion: "2.184.0", authMode: "api-key", compatibilityRewritten: true, bodyBytes: Buffer.byteLength(body), messageCount: 2, toolCount: 1 });
   assert.doesNotMatch(JSON.stringify(summary), /private-|Bearer|authorization|description/);
   const token = __testing.workBuddyRequestSummary({ body }, { authorization: "Bearer private-token" }, false);
   assert.equal(token.authMode, "bearer");
@@ -886,7 +887,7 @@ test("插件直接调用官方刷新接口且不复用旧过期时间", async ()
     });
     assert.equal(request.url, "https://copilot.tencent.com/v2/plugin/auth/token/refresh");
     assert.equal(new Headers(request.options.headers).get("x-ide-name"), "CodeBuddy");
-    assert.equal(new Headers(request.options.headers).get("user-agent"), "CLI/2.177.1 CodeBuddy/2.177.1");
+    assert.equal(new Headers(request.options.headers).get("user-agent"), "CLI/2.184.0 CodeBuddy/2.184.0");
     assert.equal(request.options.headers["X-Refresh-Token"], "refresh");
     assert.equal(request.options.headers["X-Enterprise-Id"], "enterprise");
     assert.equal(refreshed.auth.accessToken, "new-access");

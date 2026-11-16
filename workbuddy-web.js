@@ -29,6 +29,7 @@ import {
   upsertWorkBuddySession,
 } from "./workbuddy-auth.js";
 import { fetchWorkBuddyCredits } from "./workbuddy-credits.js";
+import { createCheckinRunner, WORKBUDDY_CHECKIN_REF } from "./workbuddy-checkin.js";
 
 const PROVIDER = "workbuddy-cn";
 const LEGACY_PROVIDER = "codebuddy-cn";
@@ -290,14 +291,16 @@ async function resolveSession(webCtx, accountId, sessionId) {
   const requestedId = typeof accountId === "string" && accountId
     ? accountId
     : boundAccountId ?? store.activeId;
-  let session = store.sessions.find((entry) => entry.id === requestedId) ?? activeWorkBuddySession(store);
+  let session = requestedId ? store.sessions.find((entry) => entry.id === requestedId) : activeWorkBuddySession(store);
   if (!session) throw new Error("没有找到该 WorkBuddy 登录账号");
   if (boundAccountId && session.id !== boundAccountId) throw new Error("当前会话绑定的 WorkBuddy 登录账号不存在");
   if (sessionNeedsRefresh(session)) {
     session = { ...session, ...(await refreshWorkBuddySession(session)), updatedAt: Date.now() };
+    const latest = await readSessionStore(webCtx.credentials);
+    if (!latest.sessions.some((entry) => entry.id === session.id)) throw new Error("该 WorkBuddy 账号已删除");
     const nextStore = {
-      ...store,
-      sessions: store.sessions.map((entry) => entry.id === session.id ? session : entry),
+      ...latest,
+      sessions: latest.sessions.map((entry) => entry.id === session.id ? session : entry),
     };
     await writeSessionStore(webCtx.credentials, nextStore);
   }
@@ -308,6 +311,31 @@ export function installWorkBuddyWeb(ctx, settingsNs = "llm-pi-ai") {
   ctx.inject(["webServer", "settings", "credentials"], (webCtx) => {
     const settings = settingsAccess(webCtx.settings, settingsNs);
     let loginPromise;
+    const checkins = createCheckinRunner({
+      readAccounts: async () => (await readSessionStore(webCtx.credentials)).sessions,
+      resolveAccount: (id) => resolveSession(webCtx, id),
+      readState: async () => {
+        const value = await webCtx.credentials.resolve(credentialRef(WORKBUDDY_CHECKIN_REF));
+        if (!value?.value) return {};
+        try { return JSON.parse(value.value); } catch { throw new Error("签到记录损坏，请检查凭据存储"); }
+      },
+      writeState: (value) => webCtx.credentials.set(credentialRef(WORKBUDDY_CHECKIN_REF), JSON.stringify(value)),
+    });
+    const accountOverview = async (req, res) => {
+      if (req.method !== "POST") return json(res, 405, { ok: false, message: "Method not allowed" });
+      if (!localPost(req)) return json(res, 403, { ok: false, message: "只允许本机页面查询账号" });
+      try { json(res, 200, { ok: true, ...(await checkins.snapshot()) }); }
+      catch { json(res, 500, { ok: false, message: "读取签到记录失败" }); }
+    };
+    const checkin = async (req, res) => {
+      if (req.method !== "POST") return json(res, 405, { ok: false, message: "Method not allowed" });
+      if (!localPost(req)) return json(res, 403, { ok: false, message: "只允许本机页面签到" });
+      try {
+        const body = await requestBody(req);
+        if (body.accountId !== undefined && (typeof body.accountId !== "string" || !body.accountId.trim())) return json(res, 400, { ok: false, message: "账号 ID 无效" });
+        json(res, 200, { ok: true, ...(await checkins.run({ accountId: body.accountId, refreshOnly: body.refreshOnly === true })) });
+      } catch { json(res, 500, { ok: false, message: "签到或保存结果失败，请刷新后重试" }); }
+    };
     const currentState = async (requestedSessionId) => {
       const sessionId = sessionIdOf(requestedSessionId);
       const store = await readSessionStore(webCtx.credentials);
@@ -600,7 +628,7 @@ export function installWorkBuddyWeb(ctx, settingsNs = "llm-pi-ai") {
             todayUsageError: "今日请求量查询仅支持 WorkBuddy 令牌登录",
           });
         }
-        const session = await resolveSession(webCtx, selection.activeAccountId ?? body.accountId, sessionId);
+        const session = await resolveSession(webCtx, sessionId ? selection.activeAccountId : body.accountId ?? selection.activeAccountId, sessionId);
         const result = await fetchWorkBuddyCredits(session);
         json(res, 200, {
           ok: true,
@@ -684,6 +712,8 @@ export function installWorkBuddyWeb(ctx, settingsNs = "llm-pi-ai") {
     };
     webCtx.effect(() => {
       const dispose = [
+        webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/accounts`, handler: accountOverview }),
+        webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/checkin`, handler: checkin }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/status`, handler: status }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/models`, handler: models }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/routing`, handler: routing }),
@@ -696,7 +726,18 @@ export function installWorkBuddyWeb(ctx, settingsNs = "llm-pi-ai") {
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/login`, handler: login }),
         webCtx.webServer.register({ kind: "exact", path: `${ROUTE}/remove`, handler: remove }),
       ];
-      return () => dispose.forEach((fn) => fn());
+      let disposed = false, scheduled = false;
+      const automaticCheckin = () => {
+        if (disposed || scheduled) return;
+        scheduled = true;
+        checkins.run({ automatic: true }).catch(() => {
+          webCtx.logger?.warn?.("WorkBuddy 自动签到未完成，请在账号面板检查或重试");
+        }).finally(() => { scheduled = false; });
+      };
+      automaticCheckin();
+      const timer = setInterval(automaticCheckin, 60_000);
+      timer.unref?.();
+      return () => { disposed = true; clearInterval(timer); checkins.stop(); dispose.forEach((fn) => fn()); };
     }, "llm-workbuddy: web login routes");
   });
 }

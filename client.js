@@ -30,6 +30,7 @@ window.__ModuleLoader__.load({
     function button(text) {
       const element = document.createElement("button");
       element.type = "button";
+      element.className = "wb-button";
       element.textContent = text;
       Object.assign(element.style, {
         minHeight: "44px",
@@ -52,6 +53,7 @@ window.__ModuleLoader__.load({
     function accountPicker() {
       const element = document.createElement("select");
       element.setAttribute("aria-label", "WorkBuddy 令牌账号");
+      element.className = "wb-field-control";
       Object.assign(element.style, {
         minHeight: "44px",
         minWidth: "180px",
@@ -72,6 +74,7 @@ window.__ModuleLoader__.load({
     function textInput(type, placeholder, ariaLabel) {
       const element = document.createElement("input");
       element.type = type;
+      element.className = "wb-field-control";
       element.placeholder = placeholder;
       element.setAttribute("aria-label", ariaLabel);
       element.autocomplete = type === "password" ? "new-password" : "off";
@@ -118,6 +121,7 @@ window.__ModuleLoader__.load({
 
     function section() {
       const element = document.createElement("div");
+      element.className = "wb-section";
       Object.assign(element.style, {
         display: "flex",
         flexDirection: "column",
@@ -170,6 +174,76 @@ window.__ModuleLoader__.load({
       return Number.isFinite(number) ? number.toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—";
     }
 
+    function expiryText(segments, now = Date.now()) {
+      const known = (Array.isArray(segments) ? segments : []).filter((s) => s.remaining > 0 && typeof s.expiresAt === "number" && Number.isFinite(s.expiresAt)).sort((a, b) => a.expiresAt - b.expiresAt);
+      if (!known.length) return "到期时间未知";
+      const first = known[0], amount = known.filter((s) => s.expiresAt === first.expiresAt).reduce((n, s) => n + Number(s.remaining), 0);
+      const delta = first.expiresAt - now;
+      const remaining = delta <= 0 ? "已到期，待服务端更新" : delta < 3600_000 ? "不足 1 小时后到期" : delta < 86400_000 ? Math.ceil(delta / 3600_000) + " 小时后到期" : Math.ceil(delta / 86400_000) + " 天后到期";
+      return formatCredits(amount) + " 积分" + (delta <= 0 ? "：" : "将于 ") + remaining;
+    }
+
+    function expiryDate(value) {
+      return typeof value === "number" && Number.isFinite(value)
+        ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) + "（北京时间）" : "到期时间未知";
+    }
+
+    function creditDistribution(segments, now = Date.now()) {
+      const groups = [
+        { label: "3 天内到期", value: 0, color: "#fb923c" },
+        { label: "4–7 天到期", value: 0, color: "#facc15" },
+        { label: "7 天后到期", value: 0, color: "#818cf8" },
+        { label: "到期未知", value: 0, color: "#94a3b8" },
+      ];
+      for (const item of Array.isArray(segments) ? segments : []) {
+        const amount = Number(item.remaining);
+        if (!Number.isFinite(amount) || amount <= 0) continue;
+        const delta = typeof item.expiresAt === "number" && Number.isFinite(item.expiresAt) ? item.expiresAt - now : null;
+        groups[delta === null ? 3 : delta <= 3 * 86400_000 ? 0 : delta <= 7 * 86400_000 ? 1 : 2].value += amount;
+      }
+      return groups;
+    }
+
+    function creditChart(segments) {
+      const groups = creditDistribution(segments), total = groups.reduce((sum, group) => sum + group.value, 0);
+      const chart = document.createElement("div"), bar = document.createElement("div"), legend = document.createElement("div");
+      chart.className = "wb-credit-chart";
+      bar.className = "wb-credit-track";
+      bar.setAttribute("role", "img");
+      bar.setAttribute("aria-label", total ? groups.filter((g) => g.value).map((g) => g.label + " " + formatCredits(g.value) + " 积分").join("，") : "暂无积分批次数据");
+      legend.className = "wb-credit-legend";
+      for (const group of groups.filter((g) => g.value > 0)) {
+        const part = document.createElement("span"), label = document.createElement("span"), dot = document.createElement("i");
+        part.style.width = (group.value / total * 100) + "%";
+        part.style.background = dot.style.background = group.color;
+        part.title = group.label + "：" + formatCredits(group.value) + " 积分";
+        dot.setAttribute("aria-hidden", "true");
+        label.append(dot, group.label + " " + formatCredits(group.value));
+        bar.append(part);
+        legend.append(label);
+      }
+      if (!total) legend.textContent = "暂无积分批次数据";
+      chart.append(bar, legend);
+      return chart;
+    }
+
+    function creditDetails(segments, withChart = true) {
+      const details = document.createElement("details"), summary = document.createElement("summary");
+      summary.textContent = "积分批次与到期时间";
+      details.append(summary);
+      details.className = "wb-credit-details";
+      const list = Array.isArray(segments) ? segments : [];
+      if (!list.length) details.append("暂无积分批次数据，到期时间未知");
+      else if (withChart) details.append(creditChart(list));
+      for (const item of list) {
+        const line = document.createElement("div");
+        line.textContent = String(item.source || "积分") + " · " + formatCredits(item.remaining) + " 积分 · " + expiryDate(item.expiresAt) + (typeof item.expiresAt === "number" && Number.isFinite(item.expiresAt) ? " · " + expiryText([item]) : "");
+        line.style.overflowWrap = "anywhere";
+        details.append(line);
+      }
+      return details;
+    }
+
     async function authRequest(path, body, sessionId) {
       const options = {
         method: body === undefined ? "GET" : "POST",
@@ -217,7 +291,9 @@ window.__ModuleLoader__.load({
     }
 
     function createPendingSelector() {
+      installAccountVisualStyles();
       const panel = document.createElement("div");
+      panel.className = "wb-pending-selector";
       panel.setAttribute(PENDING_MARKER, "");
       panel.setAttribute("role", "group");
       panel.setAttribute("aria-label", "WorkBuddy 新会话凭证");
@@ -375,6 +451,96 @@ window.__ModuleLoader__.load({
         });
     }
 
+    function creditRingBackground(segments) {
+      const groups = creditDistribution(segments).filter((g) => g.value > 0), total = groups.reduce((n, g) => n + g.value, 0);
+      if (!total) return "conic-gradient(#94a3b8 0% 100%)";
+      let start = 0;
+      return "conic-gradient(" + groups.map((group, index) => {
+        const end = index === groups.length - 1 ? 100 : start + group.value / total * 100;
+        const part = group.color + " " + start + "% " + end + "%";
+        start = end;
+        return part;
+      }).join(", ") + ")";
+    }
+
+    function CreditExpiryRing({ segments, credits, accountName, creditError }) {
+      const trigger = useRef(null);
+      useEffect(() => {
+        const anchor = trigger.current;
+        if (!anchor) return;
+        installAccountVisualStyles();
+        const bubble = document.createElement("div"), heading = document.createElement("strong"), owner = document.createElement("div"), visual = document.createElement("div"), ring = document.createElement("div"), center = document.createElement("div"), amount = document.createElement("strong"), caption = document.createElement("small"), legend = document.createElement("div"), upcoming = document.createElement("div"), batches = document.createElement("div");
+        const id = "wb-credit-bubble-" + Math.random().toString(36).slice(2);
+        bubble.id = id;
+        bubble.className = "wb-credit-bubble";
+        bubble.setAttribute("role", "tooltip");
+        bubble.hidden = true;
+        heading.textContent = "积分到期分布";
+        owner.className = "wb-credit-bubble-owner";
+        owner.textContent = accountName || "当前会话账号";
+        visual.className = "wb-credit-bubble-visual";
+        ring.className = "wb-credit-big-ring";
+        ring.style.background = creditRingBackground(segments);
+        center.className = "wb-credit-ring-center";
+        amount.textContent = typeof credits === "number" ? formatCredits(credits) : "—";
+        caption.textContent = "剩余积分";
+        center.append(amount, caption); ring.append(center);
+        legend.className = "wb-credit-bubble-legend";
+        for (const group of creditDistribution(segments).filter((g) => g.value > 0)) {
+          const line = document.createElement("div"), dot = document.createElement("i");
+          dot.style.background = group.color;
+          line.append(dot, group.label + " · " + formatCredits(group.value));
+          legend.append(line);
+        }
+        if (!legend.childNodes.length) legend.textContent = "暂无批次数据";
+        visual.append(ring, legend);
+        upcoming.className = "wb-credit-upcoming";
+        upcoming.textContent = creditError || expiryText(segments);
+        batches.className = "wb-credit-bubble-batches";
+        batches.tabIndex = 0;
+        batches.setAttribute("aria-label", "积分批次到期明细");
+        const items = Array.isArray(segments) ? [...segments].sort((a, b) => (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity)) : [];
+        for (const item of items) {
+          const line = document.createElement("div"), title = document.createElement("div"), detail = document.createElement("small");
+          title.textContent = String(item.source || "积分") + " · " + formatCredits(item.remaining) + " 积分";
+          detail.textContent = expiryDate(item.expiresAt) + (typeof item.expiresAt === "number" && Number.isFinite(item.expiresAt) ? " · " + expiryText([item]) : "");
+          line.append(title, detail);batches.append(line);
+        }
+        if (!items.length) batches.textContent = "服务端尚未返回有效的积分批次信息";
+        bubble.append(heading, owner, visual, upcoming, batches);
+        document.body.append(bubble);
+        anchor.setAttribute("aria-controls", id);
+        let closeTimer;
+        function position() {
+          const rect = anchor.getBoundingClientRect();
+          bubble.style.width = Math.min(380, window.innerWidth - 24) + "px";
+          const above = rect.top - 22, below = window.innerHeight - rect.bottom - 22;
+          const useAbove = above >= below;
+          bubble.style.maxHeight = Math.min(window.innerHeight - 24, Math.max(180, useAbove ? above : below)) + "px";
+          const size = bubble.getBoundingClientRect();
+          bubble.style.left = Math.max(12, Math.min(rect.right - size.width, window.innerWidth - size.width - 12)) + "px";
+          bubble.style.top = Math.max(12, useAbove ? rect.top - size.height - 10 : Math.min(rect.bottom + 10, window.innerHeight - size.height - 12)) + "px";
+        }
+        function open() { window.clearTimeout(closeTimer); bubble.hidden = false; anchor.setAttribute("aria-expanded", "true"); anchor.setAttribute("aria-describedby", id); position(); }
+        function close() { bubble.hidden = true; anchor.setAttribute("aria-expanded", "false"); anchor.removeAttribute("aria-describedby"); }
+        function later() { window.clearTimeout(closeTimer); closeTimer = window.setTimeout(() => { if (!bubble.contains(document.activeElement) && document.activeElement !== anchor) close(); }, 160); }
+        function outside(event) { if (!anchor.contains(event.target) && !bubble.contains(event.target)) close(); }
+        function scroll(event) { if (!bubble.contains(event.target)) close(); }
+        function escape(event) { if (event.key === "Escape") close(); }
+        anchor.addEventListener("mouseenter", open);anchor.addEventListener("mouseleave", later);
+        anchor.addEventListener("focus", open);anchor.addEventListener("blur", later);anchor.addEventListener("click", open);
+        bubble.addEventListener("mouseenter", open);bubble.addEventListener("mouseleave", later);bubble.addEventListener("focusin", open);bubble.addEventListener("focusout", later);
+        window.addEventListener("keydown", escape);window.addEventListener("resize", close);window.addEventListener("scroll", scroll, true);window.addEventListener("pointerdown", outside);
+        return () => {
+          window.clearTimeout(closeTimer);bubble.remove();
+          anchor.removeEventListener("mouseenter", open);anchor.removeEventListener("mouseleave", later);anchor.removeEventListener("focus", open);anchor.removeEventListener("blur", later);anchor.removeEventListener("click", open);
+          anchor.removeAttribute("aria-controls");anchor.removeAttribute("aria-describedby");
+          window.removeEventListener("keydown", escape);window.removeEventListener("resize", close);window.removeEventListener("scroll", scroll, true);window.removeEventListener("pointerdown", outside);
+        };
+      }, [segments, credits, accountName, creditError]);
+      return createElement("button", { ref: trigger, type: "button", className: "wb-credit-mini-trigger", "aria-label": "查看积分到期分布", "aria-expanded": "false" }, createElement("span", { className: "wb-credit-mini-ring", "aria-hidden": true, style: { background: creditRingBackground(segments) } }));
+    }
+
     function WorkBuddyCreditsDock({ useProjection, sessionId }) {
       let selection;
       try {
@@ -396,7 +562,7 @@ window.__ModuleLoader__.load({
             setState(null);
             return;
           }
-          setState({ mode: "token", creditLoading: true, credits: undefined, todayUsage: null, creditError: null, todayUsageError: null });
+          setState({ mode: "token", creditLoading: true, credits: undefined, segments: [], todayUsage: null, creditError: null, todayUsageError: null });
           let status;
           try {
             status = await authRequest("status", undefined, sessionId);
@@ -417,7 +583,7 @@ window.__ModuleLoader__.load({
               const message = error instanceof Error ? error.message : "查询 WorkBuddy 积分失败";
               setState({
                 ...status,
-                credits: null,
+                credits: null, segments: [],
                 creditLoading: false,
                 creditError: message,
                 todayUsage: null,
@@ -482,7 +648,7 @@ window.__ModuleLoader__.load({
           } catch (error) {
             setState({
               ...result,
-              credits: null,
+              credits: null, segments: [],
               creditLoading: false,
               creditError: error instanceof Error ? error.message : "查询 WorkBuddy 积分失败",
               todayUsage: null,
@@ -575,7 +741,9 @@ window.__ModuleLoader__.load({
           },
         },
         sessionControls,
-        state.mode === "token" ? createElement("span", null, creditsText) : null,
+        state.mode === "token" ? createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: "4px" } }, creditsText,
+          !state.creditLoading && !state.unlimited ? createElement(CreditExpiryRing, { segments: state.segments, credits: state.credits, creditError: state.creditError, accountName: activeAccount ? accountText(activeAccount) : "" }) : null,
+        ) : null,
         state.mode === "token" ? createElement("span", { "aria-hidden": true, style: { opacity: 0.55, padding: "0 4px" } }, "·") : null,
         state.mode === "token" ? createElement("span", null, usageText) : createElement("span", null, "当前会话 API Key"),
         modlensHint,
@@ -640,10 +808,19 @@ window.__ModuleLoader__.load({
 
     function applyCreditStatus(stats, status, activeAccount) {
       const visible = status.mode === "token" && Boolean(activeAccount);
-      setVisible(stats, visible);
+      setVisible(stats, visible, "grid");
       if (!visible) return;
       const credit = stats.querySelector('[data-workbuddy-stat="credits"]');
       const usage = stats.querySelector('[data-workbuddy-stat="usage"]');
+      const expiry = stats.querySelector('[data-workbuddy-stat="expiry"]');
+      if (expiry) expiry.textContent = status.creditLoading ? "到期信息读取中…" : status.unlimited ? "" : expiryText(status.segments);
+      const batches = stats.querySelector('[data-workbuddy-batches]');
+      if (batches) {
+        const open = batches.firstElementChild?.open;
+        const details = creditDetails(status.segments);
+        details.open = Boolean(open);
+        batches.replaceChildren(details);
+      }
       credit.title = status.creditError || "";
       usage.title = status.todayUsageError || "";
       if (status.creditLoading) credit.textContent = "剩余积分：读取中…";
@@ -705,7 +882,7 @@ window.__ModuleLoader__.load({
       accountName.textContent = activeAccount ? `当前账号：${accountText(activeAccount)}` : "";
       accountName.title = activeAccount ? accountLabel(activeAccount) : "";
       removeButton.hidden = !token || !activeAccount;
-      setVisible(accountStats, token && Boolean(activeAccount));
+      setVisible(accountStats, token && Boolean(activeAccount), "grid");
       applyCreditStatus(accountStats, status, activeAccount);
       routingToggle.checked = status.routingEnabled === true;
       routingToggle.disabled = false;
@@ -737,12 +914,14 @@ window.__ModuleLoader__.load({
     function mount(input) {
       const field = input.parentElement;
       if (!field || field.querySelector(`[${MARKER}]`)) return;
+      installAccountVisualStyles();
       field.setAttribute("data-workbuddy-auth-field", "");
       input.dataset.workbuddyPlaceholder = input.placeholder;
       for (const nativeNode of field.children) nativeNode.hidden = true;
       Object.assign(field.style, { display: "block", width: "100%", boxSizing: "border-box" });
       const controls = document.createElement("div");
       controls.setAttribute(MARKER, "");
+      controls.className = "wb-auth-controls";
       controls.setAttribute("role", "group");
       controls.setAttribute("aria-label", "WorkBuddy 认证方式");
       Object.assign(controls.style, {
@@ -756,7 +935,14 @@ window.__ModuleLoader__.load({
         boxSizing: "border-box",
         color: "var(--dsw-text-primary, inherit)",
       });
+      const heading = document.createElement("div");
+      heading.className = "wb-section-heading";
+      const title = document.createElement("strong"), description = document.createElement("span");
+      title.textContent = "连接与认证";
+      description.textContent = "管理账号、API Key 和会话独立凭据";
+      heading.append(title, description);
       const modeRow = row();
+      modeRow.className = "wb-mode-tabs";
       const keySection = section();
       const keySourceRow = row();
       const keyAddRow = row();
@@ -783,7 +969,9 @@ window.__ModuleLoader__.load({
         color: "var(--dsw-text-secondary, #667085)",
       });
       const saveKeyButton = button("添加并使用");
+      saveKeyButton.classList.add("wb-button-primary");
       const removeKeyButton = button("删除");
+      removeKeyButton.classList.add("wb-button-danger");
       const accountSelect = accountPicker();
       const accountName = document.createElement("span");
       Object.assign(accountName.style, {
@@ -795,9 +983,12 @@ window.__ModuleLoader__.load({
         color: "var(--dsw-text-secondary, #667085)",
       });
       const addButton = button("令牌登录");
+      addButton.classList.add("wb-button-primary");
       const removeButton = button("删除账号");
+      removeButton.classList.add("wb-button-danger");
       const accountLabel = fieldLabel("令牌账号");
       const accountStats = document.createElement("div");
+      accountStats.className = "wb-account-stats";
       accountStats.setAttribute("role", "status");
       accountStats.setAttribute("aria-live", "polite");
       Object.assign(accountStats.style, {
@@ -823,14 +1014,22 @@ window.__ModuleLoader__.load({
       creditStat.dataset.workbuddyStat = "credits";
       const usageStat = document.createElement("span");
       usageStat.dataset.workbuddyStat = "usage";
-      accountStats.append(creditStat, usageStat);
+      const expiryStat = document.createElement("span");
+      expiryStat.dataset.workbuddyStat = "expiry";
+      const batches = document.createElement("div");
+      batches.dataset.workbuddyBatches = "";
+      batches.style.width = "100%";
+      accountStats.append(creditStat, usageStat, expiryStat, batches);
       const routingRow = row();
+      routingRow.className = "wb-routing-row";
       const routingToggle = document.createElement("input");
       routingToggle.type = "checkbox";
+      routingToggle.id = "wb-routing-" + Math.random().toString(36).slice(2);
       routingToggle.setAttribute("aria-label", "启用会话级账号/API Key");
       routingToggle.style.accentColor = "var(--dsw-accent, #2563eb)";
       const routingLabel = document.createElement("label");
       routingLabel.textContent = "会话级账号/API Key";
+      routingLabel.htmlFor = routingToggle.id;
       routingLabel.style.fontSize = "13px";
       routingLabel.style.color = "var(--dsw-text-secondary, #667085)";
       const routingHint = document.createElement("span");
@@ -842,6 +1041,7 @@ window.__ModuleLoader__.load({
       message.setAttribute("role", "status");
       message.setAttribute("aria-live", "polite");
       Object.assign(message.style, { fontSize: "12px", minHeight: "18px", lineHeight: "18px" });
+      message.className = "wb-auth-status";
       modeRow.append(keyButton, tokenButton);
       keySourceRow.append(keySourceLabel, keySelect, removeKeyButton);
       keyAddRow.append(newKeyLabel, newKeyInput, newKeyLabelInput, saveKeyButton);
@@ -849,9 +1049,9 @@ window.__ModuleLoader__.load({
       accountRow.append(accountLabel, accountSelect, accountName, removeButton);
       tokenActionRow.append(addButton);
       tokenSection.append(tokenHint, accountRow, accountStats, tokenActionRow);
-      controls.append(modeRow, routingRow, keySection, tokenSection, message);
+      controls.append(heading, modeRow, routingRow, keySection, tokenSection, message);
       field.append(controls);
-      let current = { mode: "api-key", authenticated: false, accounts: [], apiKeys: [], credits: undefined, creditLoading: false, creditError: null, todayUsage: null, todayUsageError: null };
+      let current = { mode: "api-key", authenticated: false, accounts: [], apiKeys: [], credits: undefined, segments: [], creditLoading: false, creditError: null, todayUsage: null, todayUsageError: null };
       const render = (status) => {
         const previousMode = current.mode;
         const previousAccountId = current.activeAccountId;
@@ -864,21 +1064,22 @@ window.__ModuleLoader__.load({
         if (previousMode !== current.mode || previousAccountId !== current.activeAccountId || previousApiKeyId !== current.activeApiKeyId || previousAccounts !== current.accounts || previousApiKeys !== current.apiKeys || previousRouting !== current.routingEnabled) notifyAuthState();
       };
       render(current);
+      mountAccountOverview(controls, () => current, (balance) => render(balance));
       let creditRequestId = 0;
       const loadCredits = async (accountId) => {
         const requestId = ++creditRequestId;
         if (current.mode !== "token" || !accountId) {
-          render({ credits: undefined, creditLoading: false, creditError: null, todayUsage: null, todayUsageError: null });
+          render({ credits: undefined, segments: [], creditLoading: false, creditError: null, todayUsage: null, todayUsageError: null });
           return;
         }
-        render({ credits: undefined, creditLoading: true, creditError: null, todayUsage: null, todayUsageError: null });
+        render({ credits: undefined, segments: [], creditLoading: true, creditError: null, todayUsage: null, todayUsageError: null });
         try {
           const result = await request("credits", { accountId });
           if (requestId !== creditRequestId || current.activeAccountId !== accountId) return;
           render({ ...result, creditLoading: false });
         } catch (error) {
           if (requestId !== creditRequestId || current.activeAccountId !== accountId) return;
-          render({ credits: null, creditLoading: false, creditError: error instanceof Error ? error.message : "查询 WorkBuddy 积分失败", todayUsage: null, todayUsageError: "查询 WorkBuddy 今日请求量失败" });
+          render({ credits: null, segments: [], creditLoading: false, creditError: error instanceof Error ? error.message : "查询 WorkBuddy 积分失败", todayUsage: null, todayUsageError: "查询 WorkBuddy 今日请求量失败" });
         }
       };
 
@@ -1053,16 +1254,182 @@ window.__ModuleLoader__.load({
         });
     }
 
+    function installAccountVisualStyles() {
+      if (document.querySelector("style[data-workbuddy-dashboard]")) return;
+      const style = document.createElement("style");
+      style.dataset.workbuddyDashboard = "";
+      style.textContent = `
+.wb-credit-mini-trigger{display:inline-grid;place-items:center;width:24px;height:24px;padding:2px;border:0;border-radius:50%;background:transparent;cursor:pointer;color:inherit;flex-shrink:0}
+.wb-credit-mini-trigger:focus-visible{outline:2px solid #818cf8;outline-offset:2px}.wb-credit-mini-ring{width:17px;height:17px;border-radius:50%;position:relative;display:block;box-shadow:0 0 7px #818cf830}.wb-credit-mini-ring:after{content:"";position:absolute;inset:4px;border-radius:50%;background:var(--dsw-surface,#fff)}
+.wb-credit-bubble{display:flex;flex-direction:column;position:fixed;z-index:2147483000;box-sizing:border-box;padding:16px;border-radius:16px;border:1px solid var(--dsw-border,#dbe2ee);background:var(--dsw-surface,#fff);color:var(--dsw-text-primary,#1e293b);box-shadow:0 18px 60px #0f172a35;overflow:auto;font:13px/1.5 system-ui;overflow-wrap:anywhere}.wb-credit-bubble[hidden]{display:none}.wb-credit-bubble>strong{font-size:15px}.wb-credit-bubble-owner{color:var(--dsw-text-secondary,#64748b);font-size:11px;margin-top:2px}
+.wb-credit-bubble-visual{flex-shrink:0;display:flex;align-items:center;gap:16px;margin:16px 0}.wb-credit-big-ring{width:112px;height:112px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;box-shadow:0 0 20px #818cf818}.wb-credit-ring-center{width:88px;height:88px;background:var(--dsw-surface,#fff);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center}.wb-credit-ring-center strong{font-size:18px;line-height:1.4;font-variant-numeric:tabular-nums}.wb-credit-ring-center small{font-size:11px;color:var(--dsw-text-secondary,#64748b)}
+.wb-credit-bubble-legend{font-size:11px;display:grid;gap:8px}.wb-credit-bubble-legend>div{display:flex;gap:6px;align-items:center}.wb-credit-bubble-legend i{width:8px;height:8px;border-radius:50%;flex-shrink:0}.wb-credit-upcoming{flex-shrink:0;padding:9px 10px;border-radius:8px;background:#f9731612;color:var(--dsw-text-warning,#9a4b15);font-size:12px;font-weight:600}
+.wb-credit-bubble-batches{min-height:0;flex-shrink:1;max-height:230px;overflow:auto;margin-top:10px;overscroll-behavior:contain}.wb-credit-bubble-batches>div{padding:9px 0;border-bottom:1px solid var(--dsw-border,#e2e8f0)}.wb-credit-bubble-batches small{display:block;color:var(--dsw-text-secondary,#64748b);font-size:11px;margin-top:3px}
+.wb-button{border-radius:10px!important;border-color:var(--dsw-border,#dbe2ee)!important;background:var(--dsw-surface,#fff)!important;color:var(--dsw-text-primary,#334155)!important;box-shadow:0 2px 5px #18274804;transition:background-color 120ms,border-color 120ms,box-shadow 120ms!important}
+.wb-button:hover:not(:disabled){border-color:#a5b4fc!important;background:var(--dsw-accent-subtle,#eef2ff)!important;box-shadow:0 3px 10px #6366f110}.wb-button:focus-visible,.wb-field-control:focus-visible,.wb-model-editor textarea:focus-visible{outline:2px solid #818cf8;outline-offset:2px}.wb-button:disabled{opacity:.5;cursor:default!important}
+.wb-button-primary{background:linear-gradient(135deg,#394daf,#6961c9)!important;border-color:transparent!important;color:#fff!important;box-shadow:0 4px 12px #4f46e522}.wb-button-primary:hover:not(:disabled){background:linear-gradient(135deg,#32449d,#5e55bf)!important;color:#fff!important}.wb-button-danger{color:var(--dsw-text-danger,#b54454)!important;background:var(--dsw-surface,#fff)!important}.wb-button-danger:hover:not(:disabled){border-color:#f3acb8!important;background:#f43f5e0c!important}.wb-button-quiet{background:transparent!important;box-shadow:none}
+.wb-field-control,.wb-model-editor textarea{border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:10px!important;background:var(--dsw-surface,#fff)!important;color:var(--dsw-text-primary,#334155)!important;max-width:100%;box-sizing:border-box}.wb-field-control::placeholder{color:var(--dsw-text-tertiary,#8793a5)}
+.wb-section{border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:14px!important;background:var(--dsw-surface-subtle,#f6f8fc)!important;padding:14px!important;gap:12px!important;min-width:0}
+.wb-settings-surface{border:0!important;padding:0!important;background:transparent!important;box-shadow:none}
+.wb-auth-controls{gap:12px!important}.wb-section-heading{display:flex;flex-direction:column;gap:3px;padding:4px 0 0}.wb-section-heading strong,.wb-model-heading{font-size:15px;color:var(--dsw-text-primary,#26354d);font-weight:650}.wb-section-heading strong:before,.wb-model-heading:before{content:"";display:inline-block;width:4px;height:13px;background:linear-gradient(#818cf8,#4f46e5);border-radius:4px;margin-right:8px;vertical-align:-1px}.wb-section-heading>span{font-size:12px;color:var(--dsw-text-secondary,#64748b)}
+.wb-mode-tabs{width:fit-content!important;max-width:100%;gap:4px!important;padding:4px;background:var(--dsw-surface-subtle,#edf0f8);border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;box-sizing:border-box}.wb-mode-tabs .wb-button{min-height:36px!important;padding:0 18px!important;background:transparent!important;border-color:transparent!important;box-shadow:none}.wb-mode-tabs .wb-button[aria-pressed="true"]{background:linear-gradient(135deg,#394daf,#6961c9)!important;color:white!important;box-shadow:0 3px 9px #4f46e526}
+.wb-routing-row{padding:10px 12px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface-subtle,#f6f8fc);box-sizing:border-box}.wb-routing-row label{font-weight:600;cursor:pointer}.wb-routing-row input{width:16px;height:16px;margin:0;accent-color:#6366f1}
+.wb-account-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px!important}.wb-account-stats>[data-workbuddy-stat]{display:flex;align-items:center;min-height:52px;box-sizing:border-box;padding:10px;border-radius:10px;background:var(--dsw-surface,#fff);border:1px solid var(--dsw-border,#dbe2ee);font-size:12px;line-height:1.6}.wb-account-stats>[data-workbuddy-stat="expiry"]{color:var(--dsw-text-warning,#9a4b15);background:#f9731608}.wb-account-stats>[data-workbuddy-batches]{grid-column:1/-1}.wb-auth-status{padding:7px 10px;background:var(--dsw-surface-subtle,#f6f8fc);border-radius:9px;border:1px solid var(--dsw-border,#dbe2ee)}
+.wb-model-editor{margin-top:16px}.wb-model-heading{display:block;padding:3px 0}.wb-model-card{background:var(--dsw-surface,#fff)!important;border-left:3px solid #818cf8!important}.wb-model-card-heading{font-size:11px;font-weight:650;letter-spacing:.07em;color:var(--dsw-text-secondary,#64748b)}.wb-model-fields{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));align-items:end!important;gap:10px!important}.wb-model-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-field input{width:100%;min-width:0;flex:none!important}.wb-model-fields>label:not(.wb-model-field){font-size:12px;display:flex;align-items:center;gap:6px;min-height:44px}.wb-model-fields>.wb-button{justify-self:end}.wb-model-editor details{font-size:12px;color:var(--dsw-text-secondary,#64748b)}.wb-model-editor textarea{padding:10px;min-height:72px;margin-top:8px;font:12px/1.6 monospace}.wb-model-candidates:empty{display:none}.wb-model-candidates:not(:empty){padding:12px;border:1px dashed #a5b4fc;border-radius:12px;background:var(--dsw-accent-subtle,#eef2ff)}.wb-model-candidates label{padding:5px 0;overflow-wrap:anywhere}
+.wb-pending-selector{padding:8px 10px!important;gap:8px!important;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface-subtle,#f6f8fc)}.wb-pending-selector select,[data-workbuddy-session-controls] select{border:1px solid var(--dsw-border,#dbe2ee)!important;border-radius:8px!important;background:var(--dsw-surface,#fff)!important;padding:3px 7px!important;color:var(--dsw-text-primary,#475569)!important}.wb-pending-selector select:focus-visible,[data-workbuddy-session-controls] select:focus-visible{outline:2px solid #818cf8;outline-offset:2px}[data-workbuddy-session-controls]>span:first-child{padding:2px 7px;border-radius:7px;background:#6366f110;color:var(--dsw-text-secondary,#64748b)}[data-workbuddy-session-controls] button{border-radius:7px!important;border:1px solid var(--dsw-border,#dbe2ee)!important;padding:2px 7px!important;text-decoration:none!important}
+@media(max-width:500px){.wb-account-stats{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.wb-button{transition:none!important}}
+.wb-account-panel{padding:12px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:14px;background:var(--dsw-surface-subtle,#f6f8fc);box-sizing:border-box}
+.wb-account-panel>summary{font-weight:650;cursor:pointer;padding:4px 0 10px}
+.wb-dashboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}
+.wb-metric{border-radius:12px;padding:14px;color:#f8fafc;background:linear-gradient(135deg,#253d86,#5354be);box-shadow:0 5px 15px #313d7614;display:flex;gap:12px;align-items:center;min-width:0}
+.wb-metric:nth-child(2){background:linear-gradient(135deg,#0d596b,#157c83)}
+.wb-metric:nth-child(3){background:linear-gradient(135deg,#80502a,#aa5b37)}
+.wb-metric small{display:block;color:#e2e8f0;font-size:12px}.wb-metric strong{display:block;font-size:24px;line-height:1.3;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.wb-metric p{margin:4px 0 0;font-size:11px;color:#e2e8f0}
+.wb-progress-ring{width:54px;height:54px;border-radius:50%;display:grid;place-items:center;flex-shrink:0;background:conic-gradient(#a5b4fc var(--wb-progress),#ffffff24 0)}
+.wb-progress-ring span{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;background:#34438e;color:white;font-weight:700;font-size:12px}
+.wb-account-card{padding:14px;margin-top:10px;border:1px solid var(--dsw-border,#dbe2ee);border-radius:12px;background:var(--dsw-surface,#fff);position:relative;overflow:hidden}
+.wb-account-card:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:#818cf8}
+.wb-account-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px}.wb-account-badge{padding:3px 9px;border-radius:20px;font-size:12px;font-weight:600;background:#64748b20;color:var(--dsw-text-secondary,#475569)}
+.wb-account-badge[data-tone="success"]{background:#10b98120;color:var(--dsw-text-success,#12714d)}.wb-account-badge[data-tone="warning"]{background:#f9731620;color:var(--dsw-text-warning,#a34b0e)}
+.wb-account-balance{font-size:14px;font-weight:600;color:var(--dsw-text-primary,#1e293b);margin:5px 0}.wb-account-time{font-size:11px;color:var(--dsw-text-secondary,#667085);margin:6px 0}
+.wb-credit-chart{margin:10px 0 8px}.wb-credit-track{height:9px;display:flex;gap:2px;border-radius:8px;overflow:hidden;background:var(--dsw-border,#e2e8f0)}.wb-credit-track span{display:block;min-width:2px;border-radius:2px}
+.wb-credit-legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--dsw-text-secondary,#64748b);margin-top:7px}.wb-credit-legend span{display:inline-flex;align-items:center;gap:4px}.wb-credit-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.wb-credit-details{font-size:12px;margin:6px 0}.wb-credit-details summary{cursor:pointer;color:var(--dsw-text-secondary,#475569)}.wb-credit-details>div:not(.wb-credit-chart){padding:5px 0;border-bottom:1px solid var(--dsw-border,#e2e8f0)}
+.wb-account-panel button{min-height:34px}.wb-account-panel button:disabled{opacity:.5;cursor:default!important}.wb-account-panel summary:focus-visible{outline:2px solid #818cf8;outline-offset:3px;border-radius:4px}
+`;
+      document.head.append(style);
+    }
+
+    function mountAccountOverview(host, getState, onBalance) {
+      installAccountVisualStyles();
+      const panel = document.createElement("details"), summary = document.createElement("summary");
+      summary.textContent = "全部账号 · 每日签到与积分";
+      Object.assign(panel.style, { width: "100%", fontSize: "13px", lineHeight: "1.6", overflowWrap: "anywhere" });
+      panel.className = "wb-account-panel";
+      panel.open = true;
+      const dashboard = document.createElement("div");
+      dashboard.className = "wb-dashboard";
+      const hint = document.createElement("div");
+      hint.textContent = "仅插件保存的登录账号；DSH 启动和跨日自动签到。API Key 不支持签到。";
+      const actions = row(), all = button("全部签到"), refresh = button("刷新全部余额");
+      const message = document.createElement("div"), list = document.createElement("div");
+      message.setAttribute("role", "status");
+      message.setAttribute("aria-live", "polite");
+      actions.append(all, refresh);
+      panel.append(summary, hint, dashboard, actions, message, list);
+      host.append(panel);
+      let busy = false, requestId = 0, loaded = false, lastOverview = "", renderedAt = 0;
+      function renderOverview(data) {
+        lastOverview = JSON.stringify(data);
+        renderedAt = Date.now();
+        const accounts = getState().accounts ?? [];
+        const records = data.accounts ?? [];
+        const complete = records.filter((a) => a.checkin?.date === data.date && a.checkin.ok).length;
+        const eligible = records.filter((a) => !a.checkin?.unsupported).length;
+        const known = records.filter((a) => typeof a.credits === "number" && Number.isFinite(a.credits));
+        const total = known.reduce((sum, a) => sum + a.credits, 0);
+        const soon = records.flatMap((a) => creditDistribution(a.segments).slice(0, 2)).reduce((sum, g) => sum + g.value, 0);
+        dashboard.replaceChildren();
+        const tiles = [
+          ["今日签到", complete + " / " + eligible, "按北京时间每日检查"],
+          ["已知总余额", known.length ? formatCredits(total) : "—", "已读取 " + known.length + " / " + records.length + " 个账号"],
+          ["7 天内到期", known.length ? formatCredits(soon) : "—", "积分到期后由上游清理"],
+        ];
+        tiles.forEach(([label, value, note], i) => {
+          const tile = document.createElement("div"), text = document.createElement("div"), title = document.createElement("small"), amount = document.createElement("strong"), foot = document.createElement("p");
+          tile.className = "wb-metric";
+          title.textContent = label; amount.textContent = value; foot.textContent = note;
+          if (i === 0) {
+            const ring = document.createElement("div"), percent = document.createElement("span");
+            ring.className = "wb-progress-ring";
+            ring.style.setProperty("--wb-progress", (eligible ? complete / eligible * 100 : 0) + "%");
+            percent.textContent = eligible ? Math.round(complete / eligible * 100) + "%" : "—";
+            ring.setAttribute("aria-hidden", "true");
+            ring.append(percent);tile.append(ring);
+          }
+          text.append(title, amount, foot);tile.append(text);dashboard.append(tile);
+        });
+        summary.textContent = "全部账号 · 今日已签到 " + complete + "/" + records.filter((a) => !a.checkin?.unsupported).length + (records.some((a) => a.checkin?.unsupported) ? " · 含不支持签到的账号" : "");
+        all.disabled = refresh.disabled = busy || data.running;
+        all.title = refresh.title = data.running ? "正在处理账号，请稍候" : "";
+        const expanded = new Set(Array.from(list.querySelectorAll("[data-account-id]" )).filter((card) => card.querySelector("details")?.open).map((card) => card.dataset.accountId));
+        list.replaceChildren();
+        if (!records.length) list.append("尚无登录账号，请先添加账号。");
+        for (const item of records) {
+          const card = document.createElement("div"), name = document.createElement("strong"), status = document.createElement("div"), balance = document.createElement("div"), last = document.createElement("div"), retry = button("签到 / 重试");
+          card.className = "wb-account-card";
+          const header = document.createElement("div");
+          header.className = "wb-account-header";
+          status.className = "wb-account-badge";
+          balance.className = "wb-account-balance";
+          last.className = "wb-account-time";
+          card.dataset.accountId = item.id;
+          name.textContent = accountText(accounts.find((a) => a.id === item.id) ?? { id: item.id });
+          const checkin = item.checkin;
+          status.textContent = checkin?.date === data.date ? checkin.message + (checkin.ok && checkin.reward != null ? " · 获得 " + formatCredits(checkin.reward) + " 积分" : "") : "今日待签到";
+          status.dataset.tone = checkin?.date === data.date && checkin.ok ? "success" : checkin?.unsupported ? "neutral" : "warning";
+          balance.textContent = item.creditError || (item.unlimited ? "剩余积分：不限量" : typeof item.credits === "number" ? "剩余积分：" + formatCredits(item.credits) + " · " + expiryText(item.segments) : "余额待刷新");
+          last.textContent = "最近执行：" + (checkin?.checkedAt ? expiryDate(checkin.checkedAt) : "尚未执行") + (item.balanceAt ? " · 余额更新：" + expiryDate(item.balanceAt) : "");
+          retry.disabled = busy || data.running || checkin?.unsupported === true || checkin?.date === data.date && checkin.ok;
+          retry.title = checkin?.unsupported ? "企业账号不支持签到，可正常查询余额" : checkin?.date === data.date && checkin.ok ? "今日已完成，无需重复签到" : "为此账号签到，不切换当前账号";
+          retry.addEventListener("click", () => run({ accountId: item.id }));
+          const batches = creditDetails(item.segments, false);
+          batches.open = expanded.has(item.id);
+          header.append(name, status);
+          card.append(header, balance, creditChart(item.segments), last, batches, retry);
+          list.append(card);
+        }
+        message.textContent = busy || data.running ? "正在处理账号…" : "签到记录日期：" + data.date + "（北京时间）";
+      }
+      async function load() {
+        const id = ++requestId;
+        try { const data = await request("accounts", {}); if (id === requestId && (JSON.stringify(data) !== lastOverview || Date.now() - renderedAt >= 60000 && !panel.contains(document.activeElement))) renderOverview(data); }
+        catch { if (id === requestId) message.textContent = "读取签到记录失败，请刷新重试"; }
+      }
+      async function run(body) {
+        if (busy) return;
+        busy = true;
+        all.disabled = refresh.disabled = true;
+        list.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        ++requestId;
+        message.textContent = "正在处理账号…";
+        try {
+          const data = await request("checkin", body);
+          const active = data.accounts?.find((a) => a.id === getState().activeAccountId);
+          if (active?.balanceAt) onBalance({ ...active, creditLoading: false });
+          busy = false;
+          renderOverview(data);
+        } catch (error) { busy = false; await load(); message.textContent = error.message || "操作失败，请重试"; }
+      }
+      all.addEventListener("click", () => run({}));
+      refresh.addEventListener("click", () => run({ refreshOnly: true }));
+      panel.addEventListener("toggle", () => { if (panel.open && !loaded) { loaded = true; run({ refreshOnly: true }); } else if (panel.open) load(); });
+      const changed = () => { loaded = false; lastOverview = ""; if (!busy) load(); };
+      window.addEventListener(AUTH_STATE_EVENT, changed);
+      const timer = window.setInterval(() => {
+        if (!panel.isConnected) { window.clearInterval(timer); window.removeEventListener(AUTH_STATE_EVENT, changed); }
+        else if (panel.open && !busy) load();
+      }, 15000);
+      load();
+    }
+
     function mountModelEditor(host) {
+      installAccountVisualStyles();
+      host.classList.add("wb-model-editor");
       const heading = document.createElement("strong");
       heading.textContent = "模型目录";
+      heading.className = "wb-model-heading";
       const actions = row();
       const fetchButton = button("获取可用模型");
       const addButton = button("添加模型");
       const resetButton = button("恢复在线目录");
+      resetButton.classList.add("wb-button-quiet");
       const saveButton = button("保存模型");
+      saveButton.classList.add("wb-button-primary");
       const list = document.createElement("div");
       const candidates = document.createElement("div");
+      candidates.className = "wb-model-candidates";
       const message = document.createElement("span");
       message.setAttribute("role", "status");
       message.setAttribute("aria-live", "polite");
@@ -1100,7 +1467,13 @@ window.__ModuleLoader__.load({
         }
         for (const [index, model] of models.entries()) {
           const item = section();
+          item.classList.add("wb-model-card");
+          const modelHeading = document.createElement("strong");
+          modelHeading.className = "wb-model-card-heading";
+          modelHeading.textContent = "模型 " + String(index + 1).padStart(2, "0");
+          item.append(modelHeading);
           const fields = row();
+          fields.className = "wb-model-fields";
           const id = makeInput(model.id, "模型 ID", (value) => { model.id = value.trim(); });
           const name = makeInput(model.name, "显示名称", (value) => { model.name = value; });
           const context = makeInput(model.contextWindow, "上下文窗口", (value) => {
@@ -1113,7 +1486,11 @@ window.__ModuleLoader__.load({
           }, "number");
           for (const input of [id, name, context, output]) {
             input.style.flex = "1 1 140px";
-            fields.append(input);
+            const field = document.createElement("label"), label = document.createElement("span");
+            field.className = "wb-model-field";
+            label.textContent = input.getAttribute("aria-label");
+            field.append(label, input);
+            fields.append(field);
           }
           const imageLabel = document.createElement("label");
           const images = document.createElement("input");
@@ -1122,6 +1499,7 @@ window.__ModuleLoader__.load({
           images.addEventListener("change", () => { model.input = images.checked ? ["text", "image"] : ["text"]; });
           imageLabel.append(images, " 图片输入");
           const remove = button("删除");
+          remove.classList.add("wb-button-danger");
           remove.addEventListener("click", () => { invalidReasoning.delete(model); models.splice(index, 1); render(); });
           fields.append(imageLabel, remove);
           item.append(fields);
@@ -1229,6 +1607,7 @@ window.__ModuleLoader__.load({
         if (provider?.provider !== "workbuddy-cn" || !root.current) return;
         const host = root.current;
         const field = section();
+        field.classList.add("wb-settings-surface");
         const input = document.createElement("input");
         input.setAttribute("aria-label", "API 密钥");
         field.append(input);
@@ -1284,6 +1663,7 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       installComposerDockLayout();
+      installAccountVisualStyles();
       ctx.slots.inject("settings.models.provider-card", () => ctx.slots.register({
         name: "settings.models.provider-card",
         key: "llm-workbuddy",

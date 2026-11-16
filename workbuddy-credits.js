@@ -60,7 +60,7 @@ function normalizeHost(value) {
   }
 }
 
-function billingHost(session) {
+export function billingHost(session) {
   return normalizeHost(session?.auth?.domain);
 }
 
@@ -70,7 +70,7 @@ function authToken(session) {
   return token;
 }
 
-function billingHeaders(session, host, enterpriseId) {
+export function billingHeaders(session, host, enterpriseId) {
   const headers = {
     accept: "application/json, text/plain, */*",
     "content-type": "application/json",
@@ -92,7 +92,7 @@ function billingHeaders(session, host, enterpriseId) {
 }
 
 function timeoutSignal(timeoutMs, externalSignal) {
-  if (externalSignal) return externalSignal;
+  if (externalSignal) return AbortSignal.any([externalSignal, AbortSignal.timeout(timeoutMs)]);
   if (typeof AbortSignal?.timeout === "function") return AbortSignal.timeout(timeoutMs);
   const controller = new AbortController();
   setTimeout(() => controller.abort(), timeoutMs).unref?.();
@@ -129,10 +129,11 @@ function parseTimestamp(value) {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value === "number" || /^\d+(?:\.\d+)?$/.test(String(value).trim())) {
     const number = Number(value);
-    if (!Number.isFinite(number)) return null;
+    if (!Number.isFinite(number) || number <= 0) return null;
     return number < 1e12 ? Math.round(number * 1000) : Math.round(number);
   }
-  const parsed = Date.parse(String(value).replace(/^(\d{4}-\d\d-\d\d)\s+/, "$1T"));
+  const text = String(value).trim().replace(/^(\d{4}-\d\d-\d\d)\s+/, "$1T");
+  const parsed = Date.parse(/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d+)?)?$/.test(text) ? text + "+08:00" : /^\d{4}-\d\d-\d\d$/.test(text) ? text + "T00:00:00+08:00" : text);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -244,6 +245,7 @@ function buildCreditResourceBody(now = new Date()) {
 async function postJson(url, session, body, action, options = {}) {
   const response = await (options.fetchImpl || globalThis.fetch)(url, {
     method: "POST",
+    redirect: "error",
     headers: billingHeaders(session, options.host, options.enterpriseId),
     body: JSON.stringify(body),
     signal: timeoutSignal(options.timeoutMs ?? 12_000, options.signal),
@@ -300,6 +302,7 @@ async function resolveEnterpriseId(session, host, options = {}) {
   if (!uid) return "";
   const response = await (options.fetchImpl || globalThis.fetch)(`${host}/console/accounts`, {
     method: "GET",
+    redirect: "error",
     headers: billingHeaders(session, host),
     signal: timeoutSignal(8_000, options.signal),
   });

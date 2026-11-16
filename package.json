@@ -1,6 +1,6 @@
 {
   "name": "@axiaohungry/dsh-llm-workbuddy",
-  "version": "1.3.27",
+  "version": "1.4.0",
   "description": "通过 WorkBuddy API Key 或 WorkBuddy 登录令牌为 DeepSeek Harness 接入 WorkBuddy 模型",
   "author": "Axiaohungry",
   "keywords": [
@@ -33,17 +33,19 @@
     "workbuddy-discovery.js",
     "workbuddy-auth.js",
     "workbuddy-credits.js",
+    "workbuddy-checkin.js",
     "workbuddy-web.js",
     "client.js",
     "cli.js",
     "cordis.patch.yml",
     "docs/反向代理调用WorkBuddy-API开发文档.md",
     "docs/2026-10-21-codebuddy-channel-analysis.md",
+    "docs/images",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check workbuddy-discovery.js && node --check workbuddy-auth.js && node --check workbuddy-credits.js && node --check workbuddy-web.js && node --check client.js && node --check cli.js && node --test test.js && node cli.js --self-test"
+    "check": "node --check index.js && node --check workbuddy-discovery.js && node --check workbuddy-auth.js && node --check workbuddy-credits.js && node --check workbuddy-web.js && node --check client.js && node --check cli.js && node --check workbuddy-checkin.js && node --test test.js checkin.test.js && node cli.js --self-test"
   },
   "dsh": {
     "engines": {
